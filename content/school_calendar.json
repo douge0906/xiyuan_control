@@ -1,0 +1,16 @@
+{
+  "semester": "2026-2027-1",
+  "semesterName": "2026—2027 学年第一学期",
+  "startDate": "2026-08-31",
+  "totalWeeks": 20,
+  "holidays": [
+    {"date": "2026-10-01", "name": "国庆节", "type": "holiday"},
+    {"date": "2026-10-02", "name": "国庆节", "type": "holiday"},
+    {"date": "2026-10-03", "name": "国庆节", "type": "holiday"},
+    {"date": "2027-01-01", "name": "元旦", "type": "holiday"}
+  ],
+  "adjustments": [
+    {"date": "2026-10-10", "name": "调休上课", "type": "workday"}
+  ],
+  "note": "示例数据。实际校历请按学校发布的教学日历维护；改本文件后版本号自动变化，客户端下次探测即更新。"
+}
