@@ -729,6 +729,8 @@ async function loadResources(){
 }
 
 async function reviewResource(id, status){
+  const ok = confirm(status === 'approved' ? '确认通过这条资源？' : '确认拒绝这条资源？');
+  if(!ok) return;
   const reviewNote = status === 'rejected' ? (prompt('拒绝原因（可选）') || '') : '';
   await api(`/admin/resources/${id}/status`, {
     method: 'PATCH',
