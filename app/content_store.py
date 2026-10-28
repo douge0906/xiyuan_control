@@ -134,12 +134,35 @@ def _validate_calendar(data: Any) -> None:
 def _validate_papers(data: Any) -> None:
     items = _require_list(data)
     if len(items) > 500:
-        raise ContentError("试卷目录最多 500 项")
+        raise ContentError("文库目录最多 500 项")
+    seen_ids: set[str] = set()
+    total_files = 0
     for index, item in enumerate(items, 1):
         if not isinstance(item, dict):
             raise ContentError(f"第 {index} 项必须是对象")
-        if not str(item.get("name") or item.get("title") or "").strip():
+        name = str(item.get("name") or item.get("title") or "").strip()
+        if not name:
             raise ContentError(f"第 {index} 项缺少 name/title")
+        folder_id = str(item.get("id") or "").strip()
+        if folder_id:
+            if folder_id in seen_ids:
+                raise ContentError(f"文库目录 id 重复：{folder_id}")
+            seen_ids.add(folder_id)
+        raw_files = item.get("items") or item.get("files") or []
+        if not isinstance(raw_files, list):
+            raise ContentError(f"第 {index} 项的 items/files 必须是数组")
+        total_files += len(raw_files)
+        if total_files > 2000:
+            raise ContentError("文库资料总数最多 2000 份")
+        for file_index, file in enumerate(raw_files, 1):
+            if not isinstance(file, dict):
+                raise ContentError(f"「{name}」第 {file_index} 份资料必须是对象")
+            file_name = str(file.get("name") or file.get("title") or "").strip()
+            if not file_name:
+                raise ContentError(f"「{name}」第 {file_index} 份资料缺少标题")
+            url = str(file.get("url") or file.get("download_url") or "").strip()
+            if url and not url.startswith(("https://", "http://")):
+                raise ContentError(f"「{name}」第 {file_index} 份资料链接必须是 http(s)")
 
 
 def _history_dir(content_dir: Path) -> Path:

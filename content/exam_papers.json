@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "id": "demo",
+    "name": "示例学科（可替换）",
+    "items": [
+      {
+        "name": "示例资料.pdf",
+        "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+      }
+    ]
+  }
+]
