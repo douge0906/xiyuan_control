@@ -27,6 +27,11 @@ def version(content_dir: Path, name: str) -> str:
     return digest
 
 
+def invalidate(name: str) -> None:
+    """内容被后台保存后清掉缓存，避免同一秒内 mtime 相同返回旧版本。"""
+    _cache.pop(name, None)
+
+
 def load(content_dir: Path, name: str) -> Any:
     path = content_dir / f"{name}.json"
     if not path.exists():

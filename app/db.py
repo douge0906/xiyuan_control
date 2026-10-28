@@ -99,6 +99,18 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     detail     TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id   INTEGER,
+    content     TEXT NOT NULL,
+    contact     TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'new',   -- new / read / done
+    created_at  TEXT NOT NULL,
+    handled_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, id);
 """
 
 

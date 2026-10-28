@@ -101,6 +101,43 @@ ADMIN_HTML = """<!doctype html>
   .empty{color:var(--sub);font-size:12.5px;padding:18px 4px;text-align:center}
   .hide{display:none!important}
 
+  /* ---------- 内容管理 ---------- */
+  .tabs{display:flex;flex-wrap:wrap;gap:4px;padding:3px;background:#F3F2F8;
+         border:1px solid var(--line);border-radius:11px;margin-bottom:14px}
+  .tabs button{border:0;background:transparent;color:var(--sub);padding:7px 12px;
+               border-radius:8px;font-size:12.5px}
+  .tabs button.on{background:#fff;color:var(--ink);font-weight:650;
+                  box-shadow:0 1px 4px rgba(24,24,40,.08)}
+  .tabs button small{display:block;font-size:10px;color:var(--sub);font-weight:400}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .form-grid .full{grid-column:1/-1}
+  .form-grid label,.field-label{display:block;font-size:12px;color:var(--sub);margin-bottom:5px}
+  .input,.textarea{width:100%;padding:9px 11px;border:1px solid var(--line);
+                   border-radius:9px;background:#FAFAFC;outline:none;font:inherit}
+  .input:focus,.textarea:focus{border-color:#C9BDF5;background:#fff;
+                               box-shadow:0 0 0 3px #F2EEFF}
+  .textarea{min-height:96px;resize:vertical;line-height:1.65}
+  .jsonarea{min-height:360px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+            font-size:12px;line-height:1.6;white-space:pre;overflow:auto}
+  .editor-actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .editor-actions .msg{font-size:12px;color:var(--sub);margin-right:auto}
+  .editor-actions .msg.bad{color:var(--warn)}
+  .editor-actions .msg.ok{color:var(--ok)}
+  .btn.primary-sm{background:var(--ink);border-color:var(--ink);color:#fff}
+  .btn.danger{color:#B91C1C;border-color:#F3C6C6}
+  .msg-item{border:1px solid var(--line);border-radius:12px;padding:12px;
+            margin-bottom:10px;background:#FCFCFE}
+  .msg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .msg-head b{font-size:12px;color:var(--sub);font-weight:600}
+  .msg-item .form-grid{grid-template-columns:1fr 1fr}
+  .feedback-content{white-space:normal;max-width:440px;line-height:1.55}
+  .history-row{display:flex;align-items:center;gap:10px;padding:7px 0;
+               border-bottom:1px solid #F3F3F7;font-size:12.5px}
+  .history-row:last-child{border-bottom:0}
+  .history-row .mono{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .history-row .muted{flex:none}
+  .muted{color:var(--sub);font-size:12px}
+
   @media (max-width:860px){
     .shell{flex-direction:column}
     .side{width:auto;flex:none;height:auto;position:static;flex-direction:row;
@@ -112,6 +149,7 @@ ADMIN_HTML = """<!doctype html>
     .side-foot .who{display:none}
     .main{padding:16px 14px 40px}
     .cols{grid-template-columns:1fr}
+    .form-grid{grid-template-columns:1fr}
   }
 </style></head>
 <body>
@@ -160,6 +198,12 @@ ADMIN_HTML = """<!doctype html>
       <a data-tab="users" title="用户">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.5-3.5 4.2-5 7.5-5s6 1.5 7.5 5"/></svg><span>用户</span></a>
+      <a data-tab="content" title="内容">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>内容</span></a>
+      <a data-tab="feedback" title="反馈">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>反馈</span></a>
       <a data-tab="risk" title="风控">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M12 3.5 21 20H3z"/><path d="M12 9v4.5"/>
@@ -224,6 +268,38 @@ ADMIN_HTML = """<!doctype html>
       </div>
     </section>
 
+    <!-- 内容管理 -->
+    <section id="tab-content" class="hide">
+      <div class="panel">
+        <div class="hd">
+          <h3>内容管理</h3>
+          <span class="muted" id="contentMeta">—</span>
+        </div>
+        <div class="tabs" id="contentTabs">
+          <button data-content="app_release" class="on">版本发布<small id="cv-app_release">—</small></button>
+          <button data-content="messages">公告<small id="cv-messages">—</small></button>
+          <button data-content="school_calendar">校历<small id="cv-school_calendar">—</small></button>
+          <button data-content="exam_papers">试卷库<small id="cv-exam_papers">—</small></button>
+        </div>
+        <div id="contentEditor"></div>
+        <div id="contentHistory"></div>
+      </div>
+    </section>
+
+    <!-- 反馈 -->
+    <section id="tab-feedback" class="hide">
+      <div class="panel">
+        <div class="hd"><h3>用户反馈</h3>
+          <select id="fbFilter" class="input" style="width:160px;padding:7px 10px" onchange="loadFeedback()">
+            <option value="">全部</option><option value="new">未读</option>
+            <option value="read">已读</option><option value="done">已处理</option>
+          </select>
+        </div>
+        <div style="overflow:auto;max-height:60vh"><table id="fbTable"></table></div>
+        <p class="muted" style="padding:6px 2px 0">反馈可匿名提交；带设备令牌时显示设备序列号，不采集学号明文。</p>
+      </div>
+    </section>
+
     <!-- 风控 -->
     <section id="tab-risk" class="hide">
       <div class="panel">
@@ -251,6 +327,8 @@ const TITLES = {
   overview: ['概览', '设备、用户与内容下发情况'],
   devices: ['设备', '按最后活跃排序，可封禁 / 恢复'],
   users: ['用户', '学号哈希与固定伪名，可停用'],
+  content: ['内容', '版本、公告、校历与试卷库，保存后自动生效'],
+  feedback: ['反馈', '匿名用户反馈与处理状态'],
   risk: ['风控', '登录频次异常与多设备绑定'],
   audit: ['审计', '管理端写操作记录'],
 };
@@ -259,9 +337,11 @@ const auth = () => ({'Authorization': 'Bearer ' + KEY});
 
 async function api(path, opts={}){
   const res = await fetch(path, {...opts, headers: {...(opts.headers||{}), ...auth()}});
-  if (res.status === 401) throw new Error('unauthorized');
-  if (!res.ok) throw new Error('http ' + res.status);
-  return res.json();
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  if (res.status === 401) throw new Error('密钥无效或已失效');
+  if (!res.ok) throw new Error((data && data.error && data.error.message) || ('HTTP ' + res.status));
+  return data;
 }
 
 const fmt = (n) => (n ?? 0).toLocaleString('zh-CN');
@@ -391,6 +471,239 @@ async function loadAudit(){
     + '</tbody>';
 }
 
+// ---------------------------------------------------------------- 内容管理
+
+const CONTENT_LABELS = {
+  app_release: '版本发布', messages: '公告',
+  school_calendar: '校历', exam_papers: '试卷库',
+};
+let CONTENT_NAME = 'app_release';
+let MESSAGES = [];
+
+async function loadContent(){
+  try{
+    const d = await api('/admin/content');
+    d.items.forEach(x => {
+      const el = $('cv-' + x.name);
+      if (el) el.textContent = x.version === '0' ? '未配置' : x.version;
+    });
+    $('contentMeta').textContent = '修改后点击保存，版本号自动变化';
+    await openContent(CONTENT_NAME);
+  }catch(e){
+    $('contentEditor').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function openContent(name){
+  CONTENT_NAME = name;
+  document.querySelectorAll('#contentTabs button').forEach(b =>
+    b.classList.toggle('on', b.dataset.content === name));
+  $('contentHistory').innerHTML = '';
+  try{
+    const d = await api('/admin/content/' + name);
+    if (name === 'app_release') renderRelease(d.data || {});
+    else if (name === 'messages') renderMessages(Array.isArray(d.data) ? d.data : []);
+    else renderJson(name, d.data);
+    await loadContentHistory(name);
+  }catch(e){
+    $('contentEditor').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadContentHistory(name){
+  try{
+    const d = await api('/admin/content/' + name + '/history');
+    if (!d.items.length){ $('contentHistory').innerHTML = ''; return; }
+    $('contentHistory').innerHTML = `
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
+        <div class="field-label" style="margin-bottom:4px">历史备份 · 最近 ${d.items.length} 份</div>
+        ${d.items.map(x => `<div class="history-row">
+          <span class="mono">${esc(x.file)}</span>
+          <span class="muted">${esc(x.savedAt)}</span>
+          <button class="btn" style="padding:3px 9px;font-size:12px"
+            onclick="restoreContent('${name}','${esc(x.file)}')">恢复</button>
+        </div>`).join('')}
+      </div>`;
+  }catch(_){
+    $('contentHistory').innerHTML = '';
+  }
+}
+
+async function restoreContent(name, file){
+  if (!confirm('恢复会覆盖当前内容，确定继续？')) return;
+  try{
+    await api('/admin/content/' + name + '/restore', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({file})});
+    await openContent(name);
+  }catch(e){
+    alert('恢复失败：' + e.message);
+  }
+}
+
+function renderRelease(d){
+  $('contentEditor').innerHTML = `
+    <div class="form-grid">
+      <div><label class="field-label">版本号</label>
+        <input id="crVersion" class="input" value="${esc(d.latestVersion || '')}" placeholder="例如 1.0.8"></div>
+      <div><label class="field-label">下载地址</label>
+        <input id="crUrl" class="input" value="${esc(d.downloadUrl || '')}" placeholder="https://…"></div>
+      <div class="full"><label class="field-label">更新说明</label>
+        <textarea id="crNotes" class="textarea">${esc(d.notes || '')}</textarea></div>
+    </div>
+    <div class="editor-actions"><span id="contentMsg" class="msg"></span>
+      <button class="btn primary-sm" onclick="saveRelease()">保存发布信息</button></div>`;
+}
+
+async function saveRelease(){
+  await saveContent('app_release', {
+    latestVersion: $('crVersion').value.trim(),
+    downloadUrl: $('crUrl').value.trim(),
+    notes: $('crNotes').value.trim(),
+  });
+}
+
+function renderMessages(items){
+  MESSAGES = items.map(x => ({...x}));
+  $('contentEditor').innerHTML = `
+    <div class="editor-actions" style="margin:0 0 12px 0">
+      <span class="muted">共 ${MESSAGES.length} 条，前端按文件顺序展示</span>
+      <button class="btn" onclick="addMessage()">新增公告</button>
+    </div>
+    <div id="messageList">${MESSAGES.map(messageCard).join('') || '<div class="empty">暂无公告</div>'}</div>
+    <div class="editor-actions"><span id="contentMsg" class="msg"></span>
+      <button class="btn primary-sm" onclick="saveMessages()">保存全部公告</button></div>`;
+}
+
+function messageCard(m, i){
+  return `<div class="msg-item" data-index="${i}">
+    <div class="msg-head"><b>公告 ${i + 1}</b>
+      <button class="btn danger" style="padding:4px 10px;font-size:12px" onclick="removeMessage(${i})">删除</button></div>
+    <div class="form-grid">
+      <div><label class="field-label">ID</label>
+        <input class="input" data-f="id" value="${esc(m.id || '')}" placeholder="唯一标识"></div>
+      <div><label class="field-label">日期</label>
+        <input class="input" data-f="date" value="${esc(m.date || '')}" placeholder="2026-10-28"></div>
+      <div class="full"><label class="field-label">标题</label>
+        <input class="input" data-f="title" value="${esc(m.title || '')}"></div>
+      <div class="full"><label class="field-label">正文</label>
+        <textarea class="textarea" data-f="body">${esc(m.body || '')}</textarea></div>
+      <div class="full"><label class="muted">
+        <input type="checkbox" data-f="pinned" ${m.pinned ? 'checked' : ''}> 置顶</label></div>
+    </div></div>`;
+}
+
+function collectMessages(){
+  return [...document.querySelectorAll('#messageList .msg-item')].map(el => {
+    const val = f => el.querySelector('[data-f="' + f + '"]');
+    return {
+      id: val('id').value.trim(),
+      title: val('title').value.trim(),
+      body: val('body').value.trim(),
+      date: val('date').value.trim(),
+      pinned: val('pinned').checked,
+    };
+  });
+}
+
+function addMessage(){
+  MESSAGES = collectMessages();
+  MESSAGES.push({id: 'msg-' + Date.now(), title: '', body: '', date: new Date().toISOString().slice(0, 10), pinned: false});
+  renderMessages(MESSAGES);
+}
+
+function removeMessage(index){
+  MESSAGES = collectMessages();
+  MESSAGES.splice(index, 1);
+  renderMessages(MESSAGES);
+}
+
+async function saveMessages(){
+  await saveContent('messages', collectMessages());
+}
+
+function renderJson(name, data){
+  $('contentEditor').innerHTML = `
+    <label class="field-label">${esc(CONTENT_LABELS[name] || name)} · JSON</label>
+    <textarea id="jsonEditor" class="textarea jsonarea" spellcheck="false">${esc(JSON.stringify(data, null, 2))}</textarea>
+    <div class="editor-actions"><span id="contentMsg" class="msg"></span>
+      <button class="btn" onclick="validateJson()">仅校验</button>
+      <button class="btn primary-sm" onclick="saveJson('${name}')">保存</button></div>`;
+}
+
+function readJson(){
+  const msg = $('contentMsg');
+  try{
+    return JSON.parse($('jsonEditor').value);
+  }catch(e){
+    msg.className = 'msg bad';
+    msg.textContent = 'JSON 格式错误：' + e.message;
+    return null;
+  }
+}
+
+function validateJson(){
+  if (readJson() !== null){
+    const msg = $('contentMsg'); msg.className = 'msg ok'; msg.textContent = 'JSON 格式正确';
+  }
+}
+
+async function saveJson(name){
+  const data = readJson();
+  if (data !== null) await saveContent(name, data);
+}
+
+async function saveContent(name, data){
+  const msg = $('contentMsg');
+  if (msg){ msg.className = 'msg'; msg.textContent = '保存中…'; }
+  try{
+    const res = await api('/admin/content/' + name, {method:'PUT',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({data})});
+    if (msg){ msg.className = 'msg ok'; msg.textContent = '已保存 · 版本 ' + res.version; }
+    const el = $('cv-' + name);
+    if (el) el.textContent = res.version;
+  }catch(e){
+    if (msg){ msg.className = 'msg bad'; msg.textContent = '保存失败：' + e.message; }
+  }
+}
+
+$('contentTabs').addEventListener('click', e => {
+  const b = e.target.closest('button[data-content]');
+  if (b) openContent(b.dataset.content);
+});
+
+// ---------------------------------------------------------------- 反馈
+
+async function loadFeedback(){
+  const status = ($('fbFilter')?.value || '').trim();
+  const d = await api('/admin/feedback' + (status ? '?status=' + status : ''));
+  if(!d.items.length){ $('fbTable').innerHTML = '<tr><td class="empty">暂无反馈</td></tr>'; return; }
+  $('fbTable').innerHTML =
+    '<thead><tr><th>时间</th><th>内容</th><th>联系方式</th><th>版本</th><th>状态</th><th>操作</th></tr></thead><tbody>'
+    + d.items.map(x => `<tr>
+      <td class="mono">${esc(x.created_at)}</td>
+      <td><div class="feedback-content">${esc(x.content)}</div></td>
+      <td>${esc(x.contact || '-')}</td>
+      <td class="mono">${esc(x.app_version || '-')}</td>
+      <td>${fbStatus(x)}</td>
+      <td><span class="table-actions">
+        ${x.status === 'new' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'read')">标为已读</button>` : ''}
+        ${x.status !== 'done' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'done')">已处理</button>` : ''}
+        ${x.status === 'done' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'read')">重新打开</button>` : ''}
+      </span></td></tr>`).join('') + '</tbody>';
+}
+
+function fbStatus(x){
+  if (x.status === 'done') return '<span class="pill ok">已处理</span>';
+  if (x.status === 'read') return '<span class="pill">已读</span>';
+  return '<span class="pill bad">未读</span>';
+}
+
+async function setFeedback(id, status){
+  await api(`/admin/feedback/${id}/status`, {method:'PATCH',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
+  loadFeedback();
+}
+
 async function clearRisk(){
   await api('/admin/risk-events', {method:'DELETE'});
   loadRisk();
@@ -399,7 +712,7 @@ async function clearRisk(){
 function switchTab(name){
   CURRENT = name;
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === name));
-  ['overview','devices','users','risk','audit'].forEach(k =>
+  ['overview','devices','users','content','feedback','risk','audit'].forEach(k =>
     $('tab-' + k).classList.toggle('hide', k !== name));
   const [title, sub] = TITLES[name] || ['', ''];
   $('pageTitle').textContent = title;
@@ -408,7 +721,10 @@ function switchTab(name){
 }
 
 function reload(){
-  const loaders = {devices: loadDevices, users: loadUsers, risk: loadRisk, audit: loadAudit};
+  const loaders = {
+    devices: loadDevices, users: loadUsers, content: loadContent,
+    feedback: loadFeedback, risk: loadRisk, audit: loadAudit,
+  };
   const fn = loaders[CURRENT];
   if (fn) fn();
   else boot();

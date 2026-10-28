@@ -136,6 +136,18 @@ def risk_events(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any
     return [dict(r) for r in rows]
 
 
+def feedback(conn: sqlite3.Connection, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    sql = """SELECT f.*, d.device_serial
+             FROM feedback f
+             LEFT JOIN devices d ON d.id = f.device_id"""
+    args: tuple = ()
+    if status:
+        sql += " WHERE f.status = ?"
+        args = (status,)
+    sql += " ORDER BY f.id DESC LIMIT ?"
+    return [dict(r) for r in conn.execute(sql, (*args, limit))]
+
+
 def audit(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", (limit,)

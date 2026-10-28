@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from . import security, stats
+from . import content, content_store, security, stats
 from .api import config, db, fail
 from .config import Config
 from .db import DB
@@ -190,6 +191,145 @@ def clear_risk_events(
                      (security.iso(),))
         audit(conn, "risk_cleared")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- 内容管理
+
+def _content_meta(content_dir, name: str) -> dict[str, Any]:
+    path = content_dir / f"{name}.json"
+    if not path.exists():
+        return {"name": name, "version": "0", "size": 0, "updatedAt": ""}
+    stat = path.stat()
+    return {
+        "name": name,
+        "version": content.version(content_dir, name),
+        "size": stat.st_size,
+        "updatedAt": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/admin/content")
+def admin_content_list(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    return {"items": [_content_meta(cfg.content_dir, name) for name in content_store.NAMES]}
+
+
+@router.get("/admin/content/{name}")
+def admin_content_get(
+    name: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    try:
+        data = content_store.read(cfg.content_dir, name)
+    except content_store.ContentError as exc:
+        fail(400, "invalid_content_name", str(exc))
+    meta = _content_meta(cfg.content_dir, name)
+    meta["data"] = data
+    return meta
+
+
+@router.put("/admin/content/{name}")
+async def admin_content_put(
+    name: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    try:
+        body = await request.json()
+    except Exception:
+        fail(400, "invalid_json", "请求体不是合法 JSON")
+    if not isinstance(body, dict) or "data" not in body:
+        fail(400, "missing_data", "请求体需要包含 data 字段")
+    try:
+        version = content_store.save(cfg.content_dir, name, body["data"])
+    except content_store.ContentError as exc:
+        fail(400, "invalid_content", str(exc))
+    with db(request) as conn:
+        audit(conn, "content_saved", f"name={name} version={version}")
+    return {"ok": True, "name": name, "version": version}
+
+
+@router.get("/admin/content/{name}/history")
+def admin_content_history(
+    name: str,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=50),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    try:
+        return {"items": content_store.history(cfg.content_dir, name, limit)}
+    except content_store.ContentError as exc:
+        fail(400, "invalid_content_name", str(exc))
+
+
+@router.post("/admin/content/{name}/restore")
+async def admin_content_restore(
+    name: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    try:
+        body = await request.json()
+        filename = str(body.get("file") or "")
+        version = content_store.restore(cfg.content_dir, name, filename)
+    except content_store.ContentError as exc:
+        fail(400, "invalid_content", str(exc))
+    with db(request) as conn:
+        audit(conn, "content_restored", f"name={name} file={filename} version={version}")
+    return {"ok": True, "version": version}
+
+
+# ---------------------------------------------------------------- 反馈
+
+@router.get("/admin/feedback")
+def admin_feedback(
+    request: Request,
+    status: str = Query(default=""),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    if status and status not in ("new", "read", "done"):
+        fail(400, "invalid_status", "状态只能是 new / read / done")
+    with db(request) as conn:
+        return {"items": stats.feedback(conn, status)}
+
+
+@router.patch("/admin/feedback/{feedback_id}/status")
+async def set_feedback_status(
+    feedback_id: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    body = await request.json()
+    status = str(body.get("status") or "")
+    if status not in ("new", "read", "done"):
+        fail(400, "invalid_status", "状态只能是 new / read / done")
+    stamp = security.iso()
+    with db(request) as conn:
+        row = conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
+        if row is None:
+            fail(404, "feedback_not_found", "反馈不存在")
+        handled = stamp if status == "done" else None
+        conn.execute(
+            "UPDATE feedback SET status = ?, handled_at = ? WHERE id = ?",
+            (status, handled, feedback_id),
+        )
+        audit(conn, f"feedback_{status}", f"feedback_id={feedback_id}")
+    return {"ok": True, "status": status}
 
 
 # ---------------------------------------------------------------- 页面

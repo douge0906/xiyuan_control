@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.5",
+  "latestVersion": "1.0.8",
   "downloadUrl": "https://down.wxxydouge.icu/",
-  "notes": "控制台已就绪，客户端可开始接入版本检查。"
+  "notes": "开源版 1.0.8：校外免登录、课表全屏背景、余额与电费覆盖全楼栋。"
 }

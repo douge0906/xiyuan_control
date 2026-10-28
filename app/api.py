@@ -498,6 +498,39 @@ async def telemetry(
     return {"ok": True, "accepted": accepted}
 
 
+# ---------------------------------------------------------------- 反馈
+
+@router.post("/api/v1/feedback")
+async def submit_feedback(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """匿名反馈：带设备令牌时记录设备，未登录也可提交。"""
+    device = optional_device(request, authorization)
+    try:
+        body = await request.json()
+    except Exception:
+        fail(400, "invalid_json", "请求体不是合法 JSON")
+
+    text = str(body.get("content") or "").strip()
+    contact = str(body.get("contact") or "").strip()[:120]
+    app_version = str(body.get("app_version") or "").strip()[:32]
+    if not text:
+        fail(400, "empty_feedback", "反馈内容不能为空")
+    if len(text) > 2000:
+        fail(400, "feedback_too_long", "反馈内容最多 2000 字")
+
+    stamp = security.iso()
+    with db(request) as conn:
+        cur = conn.execute(
+            """INSERT INTO feedback (device_id, content, contact, app_version, status, created_at)
+               VALUES (?, ?, ?, ?, 'new', ?)""",
+            (device["id"] if device else None, text, contact, app_version, stamp),
+        )
+        feedback_id = cur.lastrowid
+    return {"ok": True, "id": feedback_id, "time": stamp}
+
+
 # ---------------------------------------------------------------- 内部
 
 def _risk(conn, kind: str, *, device_id: int | None = None,

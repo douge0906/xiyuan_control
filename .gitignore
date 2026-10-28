@@ -6,6 +6,9 @@ data/
 .env
 .env.*
 
+# 内容保存的历史备份（运行时产物）
+content/.history/
+
 # Python
 __pycache__/
 *.py[cod]

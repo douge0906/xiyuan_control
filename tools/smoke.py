@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -55,7 +56,7 @@ def main() -> None:
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ))
-    install_id = "smoke-" + b64(bytes(range(12)))
+    install_id = "smoke-" + b64(os.urandom(9))
     print("   公钥长度", len(public_key), "安装标识", install_id)
 
     print("== 2. 设备登记（带签名） ==")
@@ -182,6 +183,45 @@ def main() -> None:
     status, body = call("PATCH", f"/admin/devices/{device_id}/status",
                         {"status": "active"}, admin_headers)
     print("   恢复:", status, body)
+
+    print("== 13. 内容管理 ==")
+    status, body = call("GET", "/admin/content", headers=admin_headers)
+    print("  ", status, [x["name"] for x in body.get("items", [])])
+    assert status == 200 and len(body["items"]) == 4
+    status, body = call("GET", "/admin/content/app_release", headers=admin_headers)
+    print("   读取版本发布:", status, body.get("version"))
+    assert status == 200 and "data" in body
+    release = body["data"]
+    status, body = call("PUT", "/admin/content/app_release",
+                        {"data": {"latestVersion": "bad", "downloadUrl": "https://x", "notes": ""}},
+                        admin_headers)
+    print("   非法版本号应被拒:", status, body.get("error"))
+    assert status == 400 and body["error"]["code"] == "invalid_content"
+    status, body = call("PUT", "/admin/content/app_release", {"data": release}, admin_headers)
+    print("   保存原内容:", status, body.get("version"))
+    assert status == 200 and body.get("ok") is True
+    status, body = call("GET", "/admin/content/app_release/history", headers=admin_headers)
+    print("   历史备份数:", status, len(body.get("items", [])))
+    assert status == 200 and body["items"]
+    status, body = call("POST", "/admin/content/app_release/restore",
+                        {"file": body["items"][0]["file"]}, admin_headers)
+    print("   从历史恢复:", status, body.get("version"))
+    assert status == 200 and body.get("ok") is True
+
+    print("== 14. 反馈 ==")
+    status, body = call("POST", "/api/v1/feedback", {
+        "content": "smoke 自动测试反馈，可忽略", "contact": "", "app_version": "1.0.8+22",
+    })
+    print("   提交:", status, body)
+    assert status == 200 and body.get("ok") is True
+    feedback_id = body["id"]
+    status, body = call("GET", "/admin/feedback", headers=admin_headers)
+    print("   列表:", status, len(body.get("items", [])))
+    assert status == 200 and any(x["id"] == feedback_id for x in body["items"])
+    status, body = call("PATCH", f"/admin/feedback/{feedback_id}/status",
+                        {"status": "done"}, admin_headers)
+    print("   标记已处理:", status, body)
+    assert status == 200 and body.get("status") == "done"
 
     print("\n全部通过 ✅")
     time.sleep(0.2)
