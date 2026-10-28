@@ -111,6 +111,31 @@ CREATE TABLE IF NOT EXISTS feedback (
     handled_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, id);
+
+CREATE TABLE IF NOT EXISTS resource_uploads (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id   INTEGER NOT NULL,
+    course_name TEXT NOT NULL,
+    book_name   TEXT NOT NULL DEFAULT '',
+    area        TEXT NOT NULL,                 -- textbook / exam_paper / answer
+    note        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending / approved / rejected
+    created_at  TEXT NOT NULL,
+    reviewed_at TEXT,
+    review_note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_resource_uploads_status
+    ON resource_uploads(status, id);
+
+CREATE TABLE IF NOT EXISTS resource_files (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    upload_id   INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    FOREIGN KEY(upload_id) REFERENCES resource_uploads(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_resource_files_upload ON resource_files(upload_id);
 """
 
 

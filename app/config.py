@@ -18,9 +18,11 @@ class Config:
         self.root = root or Path(__file__).resolve().parent.parent
         self.data_dir = self.root / "data"
         self.content_dir = self.root / "content"
+        self.upload_dir = self.data_dir / "uploads"
         self.env_path = self.data_dir / ".env"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.content_dir.mkdir(parents=True, exist_ok=True)
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
 
         values = self._load_env()
         self.token_secret: str = values.get("TOKEN_SECRET") or self._ensure("TOKEN_SECRET")

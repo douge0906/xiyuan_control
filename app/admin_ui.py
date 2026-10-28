@@ -201,6 +201,9 @@ ADMIN_HTML = """<!doctype html>
       <a data-tab="content" title="内容">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>内容</span></a>
+      <a data-tab="resources" title="资源">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg><span>资源</span></a>
       <a data-tab="feedback" title="反馈">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>反馈</span></a>
@@ -286,6 +289,23 @@ ADMIN_HTML = """<!doctype html>
       </div>
     </section>
 
+    <!-- 资源审核 -->
+    <section id="tab-resources" class="hide">
+      <div class="panel">
+        <div class="hd">
+          <h3>资源审核</h3>
+          <select id="resFilter" class="input" style="width:160px;padding:7px 10px" onchange="loadResources()">
+            <option value="pending">待审核</option>
+            <option value="approved">已通过</option>
+            <option value="rejected">已拒绝</option>
+            <option value="">全部</option>
+          </select>
+        </div>
+        <div style="overflow:auto;max-height:60vh"><table id="resTable"></table></div>
+        <p class="muted" style="padding:6px 2px 0">通过后立即出现在客户端资源中心；拒绝仅保留审核记录，客户端不可见。</p>
+      </div>
+    </section>
+
     <!-- 反馈 -->
     <section id="tab-feedback" class="hide">
       <div class="panel">
@@ -328,6 +348,7 @@ const TITLES = {
   devices: ['设备', '按最后活跃排序，可封禁 / 恢复'],
   users: ['用户', '学号哈希与固定伪名，可停用'],
   content: ['内容', '版本、公告、校历与试卷库，保存后自动生效'],
+  resources: ['资源审核', '用户上传的教材 PDF / 试卷与答案，审核后客户端可见'],
   feedback: ['反馈', '匿名用户反馈与处理状态'],
   risk: ['风控', '登录频次异常与多设备绑定'],
   audit: ['审计', '管理端写操作记录'],
@@ -673,6 +694,50 @@ $('contentTabs').addEventListener('click', e => {
 
 // ---------------------------------------------------------------- 反馈
 
+const RES_AREA = {
+  textbook: '教材 PDF',
+  exam_paper: '试卷',
+  answer: '答案',
+};
+
+function resStatus(x){
+  if (x.status === 'approved') return '<span class="pill ok">已通过</span>';
+  if (x.status === 'rejected') return '<span class="pill">已拒绝</span>';
+  return '<span class="pill bad">待审核</span>';
+}
+
+async function loadResources(){
+  const status = ($('resFilter')?.value || '').trim();
+  const d = await api('/admin/resources' + (status ? '?status=' + status : ''));
+  if(!d.items.length){
+    $('resTable').innerHTML = '<tr><td class="empty">暂无资源上传</td></tr>';
+    return;
+  }
+  $('resTable').innerHTML =
+    '<thead><tr><th>课程 / 教材</th><th>区域</th><th>备注</th><th>文件</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
+    + d.items.map(x => `<tr>
+      <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div></td>
+      <td>${esc(RES_AREA[x.area] || x.area)}</td>
+      <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
+      <td><div class="feedback-content">${x.files.map(f => esc(f.name)).join('<br>')}</div></td>
+      <td>${resStatus(x)}</td>
+      <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
+      <td><span class="table-actions">
+        ${x.status !== 'approved' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
+        ${x.status !== 'rejected' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
+      </span></td></tr>`).join('') + '</tbody>';
+}
+
+async function reviewResource(id, status){
+  const reviewNote = status === 'rejected' ? (prompt('拒绝原因（可选）') || '') : '';
+  await api(`/admin/resources/${id}/status`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status, reviewNote}),
+  });
+  loadResources();
+}
+
 async function loadFeedback(){
   const status = ($('fbFilter')?.value || '').trim();
   const d = await api('/admin/feedback' + (status ? '?status=' + status : ''));
@@ -712,7 +777,7 @@ async function clearRisk(){
 function switchTab(name){
   CURRENT = name;
   document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === name));
-  ['overview','devices','users','content','feedback','risk','audit'].forEach(k =>
+  ['overview','devices','users','content','resources','feedback','risk','audit'].forEach(k =>
     $('tab-' + k).classList.toggle('hide', k !== name));
   const [title, sub] = TITLES[name] || ['', ''];
   $('pageTitle').textContent = title;
@@ -723,6 +788,7 @@ function switchTab(name){
 function reload(){
   const loaders = {
     devices: loadDevices, users: loadUsers, content: loadContent,
+    resources: loadResources,
     feedback: loadFeedback, risk: loadRisk, audit: loadAudit,
   };
   const fn = loaders[CURRENT];

@@ -24,6 +24,9 @@ GPLv3 · FastAPI · SQLite
 | GET | `/api/v1/messages` | 可选 | 公告 |
 | GET | `/api/v1/school-calendar` | 可选 | 校历 |
 | GET | `/api/v1/exam-papers/folders` | 可选 | 试卷目录 |
+| POST | `/api/v1/resource-uploads` | Device | 上传教材 PDF / 试卷 / 答案，进入待审队列 |
+| GET | `/api/v1/resources` | 无 | 审核通过的资源，按课程 + 教材分组 |
+| GET | `/api/v1/resources/files/{id}` | 无 | 下载已审核资源 |
 | GET | `/api/v1/app/release` | 无 | 最新版本与下载地址 |
 | POST | `/api/v1/telemetry/events` | Device | 遥测（数组，`event_id` 幂等） |
 | POST | `/api/v1/feedback` | 可选 Device | 匿名反馈（正文最多 2000 字） |
@@ -36,6 +39,7 @@ GPLv3 · FastAPI · SQLite
 | GET | `/admin/content/{name}/history` | Bearer | 最近 20 份历史备份 |
 | POST | `/admin/content/{name}/restore` | Bearer | 从历史备份恢复 |
 | GET/PATCH | `/admin/feedback`、`/admin/feedback/{id}/status` | Bearer | 反馈列表、标记已读/已处理 |
+| GET/PATCH | `/admin/resources`、`/admin/resources/{id}/status` | Bearer | 资源审核列表、通过/拒绝 |
 | GET/DELETE | `/admin/risk-events` | Bearer | 风控事件、标记已处理 |
 | GET | `/admin/audit` | Bearer | 审计日志 |
 

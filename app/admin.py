@@ -332,6 +332,79 @@ async def set_feedback_status(
     return {"ok": True, "status": status}
 
 
+# ---------------------------------------------------------------- 资源审核
+
+@router.get("/admin/resources")
+def admin_resources(
+    request: Request,
+    status: str = Query(default=""),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    if status and status not in ("pending", "approved", "rejected"):
+        fail(400, "invalid_status", "状态只能是 pending / approved / rejected")
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT * FROM resource_uploads
+               WHERE (? = '' OR status = ?)
+               ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC
+               LIMIT 500""",
+            (status, status),
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            files = conn.execute(
+                "SELECT name, size FROM resource_files WHERE upload_id = ? ORDER BY id",
+                (row["id"],),
+            ).fetchall()
+            items.append(
+                {
+                    "id": row["id"],
+                    "courseName": row["course_name"],
+                    "bookName": row["book_name"],
+                    "area": row["area"],
+                    "note": row["note"],
+                    "status": row["status"],
+                    "reviewNote": row["review_note"],
+                    "createdAt": row["created_at"],
+                    "reviewedAt": row["reviewed_at"],
+                    "files": [
+                        {"name": f["name"], "size": f["size"]} for f in files
+                    ],
+                }
+            )
+    return {"items": items}
+
+
+@router.patch("/admin/resources/{upload_id}/status")
+async def set_resource_status(
+    upload_id: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    body = await request.json()
+    status = str(body.get("status") or "")
+    if status not in ("approved", "rejected"):
+        fail(400, "invalid_status", "状态只能是 approved / rejected")
+    review_note = str(body.get("reviewNote") or "").strip()[:500]
+    stamp = security.iso()
+    with db(request) as conn:
+        row = conn.execute(
+            "SELECT * FROM resource_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+        if row is None:
+            fail(404, "resource_not_found", "上传记录不存在")
+        conn.execute(
+            """UPDATE resource_uploads
+               SET status = ?, reviewed_at = ?, review_note = ?
+               WHERE id = ?""",
+            (status, stamp, review_note, upload_id),
+        )
+        audit(conn, f"resource_{status}", f"upload_id={upload_id}")
+    return {"ok": True, "status": status}
+
+
 # ---------------------------------------------------------------- 页面
 
 @router.get("/admin", response_class=HTMLResponse)

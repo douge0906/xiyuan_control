@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 import secrets
+import uuid
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 
 from . import content, security
 from .config import Config
@@ -529,6 +532,176 @@ async def submit_feedback(
         )
         feedback_id = cur.lastrowid
     return {"ok": True, "id": feedback_id, "time": stamp}
+
+
+# ---------------------------------------------------------------- 资源上传
+
+_RESOURCE_AREAS = {"textbook", "exam_paper", "answer"}
+_RESOURCE_EXT = {
+    "textbook": {".pdf"},
+    "exam_paper": {".pdf", ".doc", ".docx"},
+    "answer": {".pdf", ".doc", ".docx"},
+}
+_MAX_FILE_BYTES = 80 * 1024 * 1024
+_MAX_FILES = 10
+
+
+def _cleanup_resource_upload(request: Request, folder: Path, upload_id: int) -> None:
+    for f in folder.glob("*"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    try:
+        folder.rmdir()
+    except OSError:
+        pass
+    with db(request) as conn:
+        conn.execute("DELETE FROM resource_files WHERE upload_id = ?", (upload_id,))
+        conn.execute("DELETE FROM resource_uploads WHERE id = ?", (upload_id,))
+
+
+@router.post("/api/v1/resource-uploads")
+async def create_resource_upload(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    course_name: str = Form(...),
+    book_name: str = Form(""),
+    area: str = Form(...),
+    note: str = Form(""),
+    files: list[UploadFile] = File(...),
+) -> dict[str, Any]:
+    """提交资源上传，进入控制台待审队列。"""
+    device = require_device(request, authorization)
+    cfg: Config = config(request)
+
+    course = course_name.strip()
+    book = book_name.strip()
+    area = area.strip()
+    note = note.strip()
+    if not course or len(course) > 256 or "\n" in course or "\r" in course:
+        fail(400, "invalid_course", "课程名称无效")
+    if len(book) > 256 or "\n" in book or "\r" in book:
+        fail(400, "invalid_book", "教材名称无效")
+    if area not in _RESOURCE_AREAS:
+        fail(400, "invalid_area", "上传区域无效")
+    if len(note) > 500:
+        fail(400, "note_too_long", "备注最多 500 字")
+    if not files:
+        fail(400, "missing_files", "请选择文件")
+    if len(files) > _MAX_FILES:
+        fail(400, "too_many_files", "一次最多 10 个文件")
+
+    stamp = security.iso()
+    with db(request) as conn:
+        cur = conn.execute(
+            """INSERT INTO resource_uploads
+               (device_id, course_name, book_name, area, note, status, created_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
+            (device["id"], course, book, area, note, stamp),
+        )
+        upload_id = cur.lastrowid
+
+    folder = cfg.upload_dir / str(upload_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    saved: list[tuple[str, str, int]] = []
+    try:
+        for item in files:
+            original = Path(item.filename or "").name.strip()[:200]
+            if not original:
+                fail(400, "invalid_filename", "文件名无效")
+            suffix = Path(original).suffix.lower()
+            if suffix not in _RESOURCE_EXT[area]:
+                fail(400, "invalid_file_type", f"文件格式不支持：{original}")
+            stored = f"{uuid.uuid4().hex}{suffix}"
+            dest = folder / stored
+            size = 0
+            with dest.open("wb") as out:
+                while True:
+                    chunk = await item.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > _MAX_FILE_BYTES:
+                        raise ValueError("文件超过 80 MB")
+                    out.write(chunk)
+            if size <= 0:
+                raise ValueError("文件为空")
+            saved.append((original, stored, size))
+            await item.close()
+
+        if not saved:
+            raise ValueError("没有可保存的文件")
+
+        with db(request) as conn:
+            for original, stored, size in saved:
+                conn.execute(
+                    """INSERT INTO resource_files (upload_id, name, stored_name, size)
+                       VALUES (?, ?, ?, ?)""",
+                    (upload_id, original, stored, size),
+                )
+    except HTTPException:
+        _cleanup_resource_upload(request, folder, upload_id)
+        raise
+    except Exception:
+        _cleanup_resource_upload(request, folder, upload_id)
+        fail(400, "upload_failed", "文件保存失败，请检查大小与格式")
+
+    return {"ok": True, "id": upload_id, "status": "pending", "time": stamp}
+
+
+@router.get("/api/v1/resources")
+def list_resources(request: Request) -> dict[str, Any]:
+    """审核通过后的共享资源，按课程 + 教材分组。"""
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT u.id AS upload_id, u.course_name, u.book_name, u.area,
+                      f.id AS file_id, f.name, f.size
+               FROM resource_uploads u
+               JOIN resource_files f ON f.upload_id = u.id
+               WHERE u.status = 'approved'
+               ORDER BY u.course_name, u.book_name, u.id, f.id"""
+        ).fetchall()
+
+    courses: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (row["course_name"], row["book_name"])
+        course = courses.setdefault(
+            key,
+            {
+                "courseName": row["course_name"],
+                "bookName": row["book_name"],
+                "files": [],
+            },
+        )
+        course["files"].append(
+            {
+                "id": row["file_id"],
+                "name": row["name"],
+                "area": row["area"],
+                "size": row["size"],
+                "downloadUrl": f"/api/v1/resources/files/{row['file_id']}",
+            }
+        )
+    return {"courses": list(courses.values())}
+
+
+@router.get("/api/v1/resources/files/{file_id}")
+def download_resource(request: Request, file_id: int):
+    cfg: Config = config(request)
+    with db(request) as conn:
+        row = conn.execute(
+            """SELECT f.*, u.status FROM resource_files f
+               JOIN resource_uploads u ON u.id = f.upload_id
+               WHERE f.id = ?""",
+            (file_id,),
+        ).fetchone()
+    if row is None or row["status"] != "approved":
+        fail(404, "resource_missing", "资源不存在")
+    path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
+    if not path.exists():
+        fail(404, "resource_missing", "资源文件不存在")
+    return FileResponse(path, filename=row["name"])
 
 
 # ---------------------------------------------------------------- 内部
