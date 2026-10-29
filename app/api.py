@@ -702,7 +702,7 @@ def list_resources(request: Request) -> dict[str, Any]:
                       f.downloads, f.parent_id
                FROM resource_uploads u
                JOIN resource_files f ON f.upload_id = u.id
-               WHERE u.status = 'approved' AND f.kind <> 'question_bank'
+               WHERE u.status = 'approved'
                ORDER BY u.course_name, u.book_name, u.id, f.id"""
         ).fetchall()
 
