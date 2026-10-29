@@ -156,6 +156,17 @@ def init(db_path: Path) -> None:
                        "TEXT NOT NULL DEFAULT 'exam_paper'")
         _ensure_column(conn, "resource_files", "downloads",
                        "INTEGER NOT NULL DEFAULT 0")
+        # 旧版只按 uploads.area 记类型；补列后把教材/答案的旧记录纠正过来。
+        conn.execute(
+            """UPDATE resource_files
+               SET kind = (SELECT area FROM resource_uploads
+                           WHERE id = resource_files.upload_id)
+               WHERE kind = 'exam_paper'
+                 AND upload_id IN (
+                   SELECT id FROM resource_uploads
+                   WHERE area IN ('textbook', 'answer')
+                 )"""
+        )
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str,
