@@ -696,9 +696,18 @@ $('contentTabs').addEventListener('click', e => {
 
 const RES_AREA = {
   textbook: '教材 PDF',
+  exam: '试卷 + 答案',
   exam_paper: '试卷',
   answer: '答案',
 };
+const RES_KIND = { textbook: '教材', exam_paper: '试卷', answer: '答案' };
+
+function fmtBytes(n){
+  n = Number(n) || 0;
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
 
 function resStatus(x){
   if (x.status === 'approved') return '<span class="pill ok">已通过</span>';
@@ -719,13 +728,26 @@ async function loadResources(){
       <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div></td>
       <td>${esc(RES_AREA[x.area] || x.area)}</td>
       <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
-      <td><div class="feedback-content">${x.files.map(f => esc(f.name)).join('<br>')}</div></td>
+      <td><div class="feedback-content">${x.files.map(f =>
+        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · <button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id},'${esc(f.name).replace(/'/g,'')}')">下载</button>`
+      ).join('<br>')}</div></td>
       <td>${resStatus(x)}</td>
       <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
       <td><span class="table-actions">
         ${x.status !== 'approved' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
         ${x.status !== 'rejected' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
       </span></td></tr>`).join('') + '</tbody>';
+}
+
+async function downloadAdminFile(fileId, name){
+  const res = await fetch(`/admin/resources/files/${fileId}`, {headers: auth()});
+  if(!res.ok){ alert('下载失败'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name || ('resource-' + fileId);
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function reviewResource(id, status){

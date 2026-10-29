@@ -118,6 +118,44 @@ def main() -> int:
         pend = client.get("/admin/resources?status=pending", headers=admin).json()["items"]
         assert pend == [], pend
 
+        # 试卷 + 答案一次提交
+        r3 = client.post(
+            "/api/v1/resource-uploads",
+            headers=device,
+            data={
+                "course_name": "高等数学",
+                "book_name": "高等数学 上册",
+                "area": "exam",
+                "note": "试卷与答案同批",
+            },
+            files=[
+                ("files", ("exam2.pdf", b"%PDF-1.4 exam2", "application/pdf")),
+                ("answer_files", ("answer2.pdf", b"%PDF-1.4 answer2", "application/pdf")),
+            ],
+        )
+        assert r3.status_code == 200, r3.text
+        upload_id3 = r3.json()["id"]
+        assert client.patch(
+            f"/admin/resources/{upload_id3}/status",
+            headers=admin,
+            json={"status": "approved", "reviewNote": "ok"},
+        ).status_code == 200
+
+        # 审核通过后同一课程下应同时有试卷和答案
+        res = client.get("/api/v1/resources").json()
+        areas = {
+            f["area"]
+            for c in res["courses"]
+            for f in c["files"]
+        }
+        assert {"textbook", "exam_paper", "answer"} <= areas, areas
+
+        # 我的上传：统计与记录
+        mine = client.get("/api/v1/resource-uploads/mine", headers=device)
+        assert mine.status_code == 200, mine.text
+        assert mine.json()["stats"]["contributions"] >= 1
+        assert mine.json()["items"]
+
         print("resource smoke OK: upload/admin/approve/reject/download")
         return 0
     finally:

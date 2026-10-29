@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from . import content, content_store, security, stats
 from .api import config, db, fail
@@ -354,7 +354,8 @@ def admin_resources(
         items: list[dict[str, Any]] = []
         for row in rows:
             files = conn.execute(
-                "SELECT name, size FROM resource_files WHERE upload_id = ? ORDER BY id",
+                """SELECT id, name, size, kind, downloads
+                   FROM resource_files WHERE upload_id = ? ORDER BY id""",
                 (row["id"],),
             ).fetchall()
             items.append(
@@ -369,7 +370,15 @@ def admin_resources(
                     "createdAt": row["created_at"],
                     "reviewedAt": row["reviewed_at"],
                     "files": [
-                        {"name": f["name"], "size": f["size"]} for f in files
+                        {
+                            "id": f["id"],
+                            "name": f["name"],
+                            "size": f["size"],
+                            "kind": f["kind"],
+                            "downloads": f["downloads"],
+                            "downloadUrl": f"/admin/resources/files/{f['id']}",
+                        }
+                        for f in files
                     ],
                 }
             )
@@ -403,6 +412,26 @@ async def set_resource_status(
         )
         audit(conn, f"resource_{status}", f"upload_id={upload_id}")
     return {"ok": True, "status": status}
+
+
+@router.get("/admin/resources/files/{file_id}")
+def admin_resource_file(
+    file_id: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    with db(request) as conn:
+        row = conn.execute(
+            "SELECT * FROM resource_files WHERE id = ?", (file_id,)
+        ).fetchone()
+    if row is None:
+        fail(404, "resource_not_found", "文件不存在")
+    path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
+    if not path.exists():
+        fail(404, "resource_not_found", "文件不存在")
+    return FileResponse(path, filename=row["name"])
 
 
 # ---------------------------------------------------------------- 页面

@@ -24,7 +24,8 @@ GPLv3 · FastAPI · SQLite
 | GET | `/api/v1/messages` | 可选 | 公告 |
 | GET | `/api/v1/school-calendar` | 可选 | 校历 |
 | GET | `/api/v1/exam-papers/folders` | 可选 | 试卷目录 |
-| POST | `/api/v1/resource-uploads` | Device | 上传教材 PDF / 试卷 / 答案，进入待审队列 |
+| POST | `/api/v1/resource-uploads` | Device | 上传教材 PDF / 试卷 + 答案，进入待审队列 |
+| GET | `/api/v1/resource-uploads/mine` | Device | 我的上传记录、贡献数与下载量 |
 | GET | `/api/v1/resources` | 无 | 审核通过的资源，按课程 + 教材分组 |
 | GET | `/api/v1/resources/files/{id}` | 无 | 下载已审核资源 |
 | GET | `/api/v1/app/release` | 无 | 最新版本与下载地址 |

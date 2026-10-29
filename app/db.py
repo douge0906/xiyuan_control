@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS resource_files (
     name        TEXT NOT NULL,
     stored_name TEXT NOT NULL,
     size        INTEGER NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'exam_paper',
+    downloads   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(upload_id) REFERENCES resource_uploads(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_resource_files_upload ON resource_files(upload_id);
@@ -150,6 +152,17 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def init(db_path: Path) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "resource_files", "kind",
+                       "TEXT NOT NULL DEFAULT 'exam_paper'")
+        _ensure_column(conn, "resource_files", "downloads",
+                       "INTEGER NOT NULL DEFAULT 0")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str,
+                   ddl: str) -> None:
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 class DB:

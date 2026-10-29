@@ -536,7 +536,7 @@ async def submit_feedback(
 
 # ---------------------------------------------------------------- 资源上传
 
-_RESOURCE_AREAS = {"textbook", "exam_paper", "answer"}
+_RESOURCE_AREAS = {"textbook", "exam", "exam_paper", "answer"}
 _RESOURCE_EXT = {
     "textbook": {".pdf"},
     "exam_paper": {".pdf", ".doc", ".docx"},
@@ -544,6 +544,7 @@ _RESOURCE_EXT = {
 }
 _MAX_FILE_BYTES = 80 * 1024 * 1024
 _MAX_FILES = 10
+_MAX_ANSWER_FILES = 10
 
 
 def _cleanup_resource_upload(request: Request, folder: Path, upload_id: int) -> None:
@@ -570,8 +571,12 @@ async def create_resource_upload(
     area: str = Form(...),
     note: str = Form(""),
     files: list[UploadFile] = File(...),
+    answer_files: list[UploadFile] | None = File(default=None),
 ) -> dict[str, Any]:
-    """提交资源上传，进入控制台待审队列。"""
+    """提交资源上传，进入控制台待审队列。
+
+    `area=exam` 时 `files` 是试卷、`answer_files` 是随卷答案，一次提交绑定。
+    """
     device = require_device(request, authorization)
     cfg: Config = config(request)
 
@@ -587,10 +592,24 @@ async def create_resource_upload(
         fail(400, "invalid_area", "上传区域无效")
     if len(note) > 500:
         fail(400, "note_too_long", "备注最多 500 字")
+
+    if area == "textbook":
+        main_kind = "textbook"
+        answers: list[UploadFile] = []
+    elif area == "exam":
+        main_kind = "exam_paper"
+        answers = list(answer_files or [])
+    else:
+        main_kind = area
+        answers = []
+    if area == "textbook" and answer_files:
+        fail(400, "invalid_answers", "教材 PDF 不接受答案文件")
     if not files:
         fail(400, "missing_files", "请选择文件")
     if len(files) > _MAX_FILES:
-        fail(400, "too_many_files", "一次最多 10 个文件")
+        fail(400, "too_many_files", "试卷/教材一次最多 10 个文件")
+    if len(answers) > _MAX_ANSWER_FILES:
+        fail(400, "too_many_answers", "答案一次最多 10 个文件")
 
     stamp = security.iso()
     with db(request) as conn:
@@ -604,41 +623,43 @@ async def create_resource_upload(
 
     folder = cfg.upload_dir / str(upload_id)
     folder.mkdir(parents=True, exist_ok=True)
-    saved: list[tuple[str, str, int]] = []
+    saved: list[tuple[str, str, int, str]] = []
     try:
-        for item in files:
-            original = Path(item.filename or "").name.strip()[:200]
-            if not original:
-                fail(400, "invalid_filename", "文件名无效")
-            suffix = Path(original).suffix.lower()
-            if suffix not in _RESOURCE_EXT[area]:
-                fail(400, "invalid_file_type", f"文件格式不支持：{original}")
-            stored = f"{uuid.uuid4().hex}{suffix}"
-            dest = folder / stored
-            size = 0
-            with dest.open("wb") as out:
-                while True:
-                    chunk = await item.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > _MAX_FILE_BYTES:
-                        raise ValueError("文件超过 80 MB")
-                    out.write(chunk)
-            if size <= 0:
-                raise ValueError("文件为空")
-            saved.append((original, stored, size))
-            await item.close()
+        for kind, items in ((main_kind, files), ("answer", answers)):
+            for item in items:
+                original = Path(item.filename or "").name.strip()[:200]
+                if not original:
+                    fail(400, "invalid_filename", "文件名无效")
+                suffix = Path(original).suffix.lower()
+                if suffix not in _RESOURCE_EXT[kind]:
+                    fail(400, "invalid_file_type", f"文件格式不支持：{original}")
+                stored = f"{uuid.uuid4().hex}{suffix}"
+                dest = folder / stored
+                size = 0
+                with dest.open("wb") as out:
+                    while True:
+                        chunk = await item.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > _MAX_FILE_BYTES:
+                            raise ValueError("文件超过 80 MB")
+                        out.write(chunk)
+                if size <= 0:
+                    raise ValueError("文件为空")
+                saved.append((original, stored, size, kind))
+                await item.close()
 
         if not saved:
             raise ValueError("没有可保存的文件")
 
         with db(request) as conn:
-            for original, stored, size in saved:
+            for original, stored, size, kind in saved:
                 conn.execute(
-                    """INSERT INTO resource_files (upload_id, name, stored_name, size)
-                       VALUES (?, ?, ?, ?)""",
-                    (upload_id, original, stored, size),
+                    """INSERT INTO resource_files
+                       (upload_id, name, stored_name, size, kind)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (upload_id, original, stored, size, kind),
                 )
     except HTTPException:
         _cleanup_resource_upload(request, folder, upload_id)
@@ -655,8 +676,9 @@ def list_resources(request: Request) -> dict[str, Any]:
     """审核通过后的共享资源，按课程 + 教材分组。"""
     with db(request) as conn:
         rows = conn.execute(
-            """SELECT u.id AS upload_id, u.course_name, u.book_name, u.area,
-                      f.id AS file_id, f.name, f.size
+            """SELECT u.id AS upload_id, u.course_name, u.book_name,
+                      u.reviewed_at, u.created_at,
+                      f.id AS file_id, f.name, f.size, f.kind, f.downloads
                FROM resource_uploads u
                JOIN resource_files f ON f.upload_id = u.id
                WHERE u.status = 'approved'
@@ -671,15 +693,21 @@ def list_resources(request: Request) -> dict[str, Any]:
             {
                 "courseName": row["course_name"],
                 "bookName": row["book_name"],
+                "updatedAt": row["reviewed_at"] or row["created_at"],
                 "files": [],
             },
         )
+        stamp = row["reviewed_at"] or row["created_at"]
+        if stamp > course["updatedAt"]:
+            course["updatedAt"] = stamp
         course["files"].append(
             {
                 "id": row["file_id"],
                 "name": row["name"],
-                "area": row["area"],
+                "area": row["kind"],
                 "size": row["size"],
+                "downloads": row["downloads"],
+                "createdAt": stamp,
                 "downloadUrl": f"/api/v1/resources/files/{row['file_id']}",
             }
         )
@@ -701,7 +729,72 @@ def download_resource(request: Request, file_id: int):
     path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
     if not path.exists():
         fail(404, "resource_missing", "资源文件不存在")
+    with db(request) as conn:
+        conn.execute(
+            "UPDATE resource_files SET downloads = downloads + 1 WHERE id = ?",
+            (file_id,),
+        )
     return FileResponse(path, filename=row["name"])
+
+
+@router.get("/api/v1/resource-uploads/mine")
+def my_resource_uploads(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """当前设备的上传记录与贡献/下载统计。"""
+    device = require_device(request, authorization)
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT * FROM resource_uploads
+               WHERE device_id = ? ORDER BY id DESC LIMIT 200""",
+            (device["id"],),
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            files = conn.execute(
+                """SELECT id, name, size, kind, downloads
+                   FROM resource_files WHERE upload_id = ? ORDER BY id""",
+                (row["id"],),
+            ).fetchall()
+            items.append(
+                {
+                    "id": row["id"],
+                    "courseName": row["course_name"],
+                    "bookName": row["book_name"],
+                    "area": row["area"],
+                    "note": row["note"],
+                    "status": row["status"],
+                    "reviewNote": row["review_note"],
+                    "createdAt": row["created_at"],
+                    "reviewedAt": row["reviewed_at"],
+                    "files": [
+                        {
+                            "id": f["id"],
+                            "name": f["name"],
+                            "size": f["size"],
+                            "area": f["kind"],
+                            "downloads": f["downloads"],
+                        }
+                        for f in files
+                    ],
+                }
+            )
+        stats = conn.execute(
+            """SELECT COUNT(f.id) AS contributions,
+                      COALESCE(SUM(f.downloads), 0) AS downloads
+               FROM resource_uploads u
+               JOIN resource_files f ON f.upload_id = u.id
+               WHERE u.device_id = ? AND u.status = 'approved'""",
+            (device["id"],),
+        ).fetchone()
+    return {
+        "stats": {
+            "contributions": stats["contributions"] if stats else 0,
+            "downloads": stats["downloads"] if stats else 0,
+        },
+        "items": items,
+    }
 
 
 # ---------------------------------------------------------------- 内部
