@@ -149,6 +149,10 @@ def main() -> int:
             for f in c["files"]
         }
         assert {"textbook", "exam_paper", "answer"} <= areas, areas
+        files = [f for c in res["courses"] for f in c["files"]]
+        paper = next(f for f in files if f["area"] == "exam_paper")
+        answer = next(f for f in files if f["area"] == "answer")
+        assert answer["parentId"] == paper["id"], (paper, answer)
 
         # 我的上传：统计与记录
         mine = client.get("/api/v1/resource-uploads/mine", headers=device)

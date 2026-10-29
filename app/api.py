@@ -654,12 +654,26 @@ async def create_resource_upload(
             raise ValueError("没有可保存的文件")
 
         with db(request) as conn:
+            first_main_id = 0
             for original, stored, size, kind in saved:
+                if kind == "answer":
+                    continue
+                cur = conn.execute(
+                    """INSERT INTO resource_files
+                       (upload_id, name, stored_name, size, kind, parent_id)
+                       VALUES (?, ?, ?, ?, ?, 0)""",
+                    (upload_id, original, stored, size, kind),
+                )
+                if first_main_id == 0:
+                    first_main_id = cur.lastrowid
+            for original, stored, size, kind in saved:
+                if kind != "answer":
+                    continue
                 conn.execute(
                     """INSERT INTO resource_files
-                       (upload_id, name, stored_name, size, kind)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (upload_id, original, stored, size, kind),
+                       (upload_id, name, stored_name, size, kind, parent_id)
+                       VALUES (?, ?, ?, ?, 'answer', ?)""",
+                    (upload_id, original, stored, size, first_main_id),
                 )
     except HTTPException:
         _cleanup_resource_upload(request, folder, upload_id)
@@ -678,7 +692,8 @@ def list_resources(request: Request) -> dict[str, Any]:
         rows = conn.execute(
             """SELECT u.id AS upload_id, u.course_name, u.book_name,
                       u.reviewed_at, u.created_at,
-                      f.id AS file_id, f.name, f.size, f.kind, f.downloads
+                      f.id AS file_id, f.name, f.size, f.kind,
+                      f.downloads, f.parent_id
                FROM resource_uploads u
                JOIN resource_files f ON f.upload_id = u.id
                WHERE u.status = 'approved'
@@ -707,6 +722,7 @@ def list_resources(request: Request) -> dict[str, Any]:
                 "area": row["kind"],
                 "size": row["size"],
                 "downloads": row["downloads"],
+                "parentId": row["parent_id"],
                 "createdAt": stamp,
                 "downloadUrl": f"/api/v1/resources/files/{row['file_id']}",
             }
@@ -753,7 +769,7 @@ def my_resource_uploads(
         items: list[dict[str, Any]] = []
         for row in rows:
             files = conn.execute(
-                """SELECT id, name, size, kind, downloads
+                """SELECT id, name, size, kind, downloads, parent_id
                    FROM resource_files WHERE upload_id = ? ORDER BY id""",
                 (row["id"],),
             ).fetchall()
@@ -775,6 +791,7 @@ def my_resource_uploads(
                             "size": f["size"],
                             "area": f["kind"],
                             "downloads": f["downloads"],
+                            "parentId": f["parent_id"],
                         }
                         for f in files
                     ],

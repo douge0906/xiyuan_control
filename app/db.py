@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS resource_files (
     size        INTEGER NOT NULL,
     kind        TEXT NOT NULL DEFAULT 'exam_paper',
     downloads   INTEGER NOT NULL DEFAULT 0,
+    parent_id   INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(upload_id) REFERENCES resource_uploads(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_resource_files_upload ON resource_files(upload_id);
@@ -155,6 +156,8 @@ def init(db_path: Path) -> None:
         _ensure_column(conn, "resource_files", "kind",
                        "TEXT NOT NULL DEFAULT 'exam_paper'")
         _ensure_column(conn, "resource_files", "downloads",
+                       "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "resource_files", "parent_id",
                        "INTEGER NOT NULL DEFAULT 0")
         # 旧版只按 uploads.area 记类型；补列后把教材/答案的旧记录纠正过来。
         conn.execute(
