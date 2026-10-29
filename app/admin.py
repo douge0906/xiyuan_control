@@ -376,7 +376,6 @@ def admin_resources(
                             "size": f["size"],
                             "kind": f["kind"],
                             "downloads": f["downloads"],
-                            "downloadUrl": f"/admin/resources/files/{f['id']}",
                         }
                         for f in files
                     ],

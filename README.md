@@ -127,7 +127,7 @@ python tools/smoke.py http://127.0.0.1:8124 <ADMIN_KEY>
 - 多管理员 / 权限分级（当前单管理员，够用）
 - 管理登录限流与密钥轮换 UI
 - 数据库迁移框架（当前用 `CREATE TABLE IF NOT EXISTS` 建表）
-- 题库与 CDK（本阶段不做内容运营）
+- CDK（本阶段不做内容运营）
 
 ## 许可证
 

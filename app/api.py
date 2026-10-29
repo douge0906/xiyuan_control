@@ -543,6 +543,7 @@ _RESOURCE_EXT = {
     "answer": {".pdf", ".doc", ".docx"},
 }
 _MAX_FILE_BYTES = 80 * 1024 * 1024
+_MAX_TOTAL_BYTES = 80 * 1024 * 1024
 _MAX_FILES = 10
 _MAX_ANSWER_FILES = 10
 
@@ -610,6 +611,8 @@ async def create_resource_upload(
         fail(400, "too_many_files", "试卷/教材一次最多 10 个文件")
     if len(answers) > _MAX_ANSWER_FILES:
         fail(400, "too_many_answers", "答案一次最多 10 个文件")
+    if area == "exam" and len(files) > 1:
+        fail(400, "too_many_papers", "一份试卷只能提交一个主文件")
 
     stamp = security.iso()
     with db(request) as conn:
@@ -643,15 +646,18 @@ async def create_resource_upload(
                             break
                         size += len(chunk)
                         if size > _MAX_FILE_BYTES:
-                            raise ValueError("文件超过 80 MB")
+                            fail(400, "file_too_large",
+                                 f"{original} 超过 80MB")
                         out.write(chunk)
                 if size <= 0:
-                    raise ValueError("文件为空")
+                    fail(400, "empty_file", f"{original} 是空文件")
                 saved.append((original, stored, size, kind))
                 await item.close()
 
         if not saved:
-            raise ValueError("没有可保存的文件")
+            fail(400, "missing_files", "没有可保存的文件")
+        if sum(item[2] for item in saved) > _MAX_TOTAL_BYTES:
+            fail(400, "total_too_large", "文件总大小超过 80MB")
 
         with db(request) as conn:
             first_main_id = 0
@@ -696,7 +702,7 @@ def list_resources(request: Request) -> dict[str, Any]:
                       f.downloads, f.parent_id
                FROM resource_uploads u
                JOIN resource_files f ON f.upload_id = u.id
-               WHERE u.status = 'approved'
+               WHERE u.status = 'approved' AND f.kind <> 'question_bank'
                ORDER BY u.course_name, u.book_name, u.id, f.id"""
         ).fetchall()
 
