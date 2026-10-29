@@ -729,7 +729,7 @@ async function loadResources(){
       <td>${esc(RES_AREA[x.area] || x.area)}</td>
       <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
       <td><div class="feedback-content">${x.files.map(f =>
-        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · <button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id},'${esc(f.name).replace(/'/g,'')}')">下载</button>`
+        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · <button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id})">下载</button>`
       ).join('<br>')}</div></td>
       <td>${resStatus(x)}</td>
       <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
@@ -739,13 +739,13 @@ async function loadResources(){
       </span></td></tr>`).join('') + '</tbody>';
 }
 
-async function downloadAdminFile(fileId, name){
+async function downloadAdminFile(fileId){
   const res = await fetch(`/admin/resources/files/${fileId}`, {headers: auth()});
   if(!res.ok){ alert('下载失败'); return; }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = name || ('resource-' + fileId);
+  a.href = url; a.download = 'resource-' + fileId;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
