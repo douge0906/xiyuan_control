@@ -14,7 +14,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import (APIRouter, File, Form, Header, HTTPException, Query,
+                     Request, UploadFile)
 from fastapi.responses import FileResponse
 
 from . import content, security
@@ -737,7 +738,15 @@ def list_resources(request: Request) -> dict[str, Any]:
 
 
 @router.get("/api/v1/resources/files/{file_id}")
-def download_resource(request: Request, file_id: int):
+def download_resource(
+    request: Request,
+    file_id: int,
+    authorization: str | None = Header(default=None),
+    mode: str = Query(default="download"),
+):
+    if mode not in {"download", "preview"}:
+        fail(400, "invalid_mode", "下载模式无效")
+    device = require_device(request, authorization)
     cfg: Config = config(request)
     with db(request) as conn:
         row = conn.execute(
@@ -746,16 +755,34 @@ def download_resource(request: Request, file_id: int):
                WHERE f.id = ?""",
             (file_id,),
         ).fetchone()
-    if row is None or row["status"] != "approved":
-        fail(404, "resource_missing", "资源不存在")
+        if row is None or row["status"] != "approved":
+            fail(404, "resource_missing", "资源不存在")
+
+        if mode == "download":
+            today = security.iso()[:10]
+            used = conn.execute(
+                """SELECT COUNT(*) AS n FROM download_events
+                   WHERE device_id = ? AND mode = 'download'
+                     AND substr(created_at, 1, 10) = ?""",
+                (device["id"], today),
+            ).fetchone()["n"]
+            if used >= 10:
+                fail(429, "download_quota", "今日下载次数已用完（10 次）")
+
+        conn.execute(
+            """INSERT INTO download_events
+               (device_id, file_id, bytes, mode, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (device["id"], file_id, row["size"], mode, security.iso()),
+        )
+        if mode == "download":
+            conn.execute(
+                "UPDATE resource_files SET downloads = downloads + 1 WHERE id = ?",
+                (file_id,),
+            )
     path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
     if not path.exists():
         fail(404, "resource_missing", "资源文件不存在")
-    with db(request) as conn:
-        conn.execute(
-            "UPDATE resource_files SET downloads = downloads + 1 WHERE id = ?",
-            (file_id,),
-        )
     return FileResponse(path, filename=row["name"])
 
 

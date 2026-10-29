@@ -13,7 +13,7 @@ from .config import Config
 from .privacy import PRIVACY_HTML
 from .security import iso as iso_now
 
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.6.0"
 
 app = FastAPI(
     title="掌上锡院控制台",

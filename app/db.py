@@ -139,6 +139,19 @@ CREATE TABLE IF NOT EXISTS resource_files (
     FOREIGN KEY(upload_id) REFERENCES resource_uploads(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_resource_files_upload ON resource_files(upload_id);
+
+CREATE TABLE IF NOT EXISTS download_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id   INTEGER NOT NULL,
+    file_id     INTEGER NOT NULL,
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    mode        TEXT NOT NULL DEFAULT 'download',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_download_events_device_time
+    ON download_events(device_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_download_events_time
+    ON download_events(created_at);
 """
 
 

@@ -291,6 +291,14 @@ ADMIN_HTML = """<!doctype html>
 
     <!-- 资源审核 -->
     <section id="tab-resources" class="hide">
+      <div class="panel" style="margin-bottom:14px">
+        <div class="hd">
+          <h3>下载流量</h3>
+          <span id="resTrafficTotals" class="muted" style="font-size:12px"></span>
+        </div>
+        <div style="overflow:auto;max-height:34vh"><table id="resTrafficTable"></table></div>
+        <p class="muted" style="padding:6px 2px 0">预览不占每日下载额度；下载按设备每天最多 10 次。流量含预览与下载。</p>
+      </div>
       <div class="panel">
         <div class="hd">
           <h3>资源审核</h3>
@@ -716,6 +724,7 @@ function resStatus(x){
 }
 
 async function loadResources(){
+  loadResourceTraffic();
   const status = ($('resFilter')?.value || '').trim();
   const d = await api('/admin/resources' + (status ? '?status=' + status : ''));
   if(!d.items.length){
@@ -729,7 +738,11 @@ async function loadResources(){
       <td>${esc(RES_AREA[x.area] || x.area)}</td>
       <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
       <td><div class="feedback-content">${x.files.map(f =>
-        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · <button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id})">下载</button>`
+        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · `
+        + (f.name.toLowerCase().endsWith('.pdf')
+            ? `<button class="btn" style="padding:2px 8px;font-size:11px" onclick="previewAdminFile(${f.id})">预览</button> `
+            : '')
+        + `<button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id})">下载</button>`
       ).join('<br>')}</div></td>
       <td>${resStatus(x)}</td>
       <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
@@ -737,6 +750,40 @@ async function loadResources(){
         ${x.status !== 'approved' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
         ${x.status !== 'rejected' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
       </span></td></tr>`).join('') + '</tbody>';
+}
+
+async function loadResourceTraffic(){
+  const d = await api('/admin/resources/traffic');
+  if(!d) return;
+  const t = d.totals || {};
+  if($('resTrafficTotals')){
+    $('resTrafficTotals').textContent =
+      `总请求 ${t.requests || 0} · 下载 ${t.downloads || 0} · 预览 ${t.previews || 0} · ${fmtBytes(t.bytes || 0)}`;
+  }
+  if(!d.devices || !d.devices.length){
+    $('resTrafficTable').innerHTML = '<tr><td class="empty">暂无下载流量</td></tr>';
+    return;
+  }
+  $('resTrafficTable').innerHTML =
+    '<thead><tr><th>设备</th><th>状态</th><th>下载</th><th>预览</th><th>流量</th><th>最近</th></tr></thead><tbody>'
+    + d.devices.map(x => `<tr>
+      <td class="mono">${esc(x.device_serial || ('#' + x.device_id))}</td>
+      <td>${x.status === 'banned' ? '<span class="pill bad">封禁</span>' : '<span class="pill ok">正常</span>'}</td>
+      <td>${x.downloads || 0}</td>
+      <td>${x.previews || 0}</td>
+      <td>${fmtBytes(x.bytes || 0)}</td>
+      <td class="mono">${esc(x.last_at || '-')}</td>
+    </tr>`).join('') + '</tbody>';
+}
+
+async function previewAdminFile(fileId){
+  const win = window.open('', '_blank');
+  const res = await fetch(`/admin/resources/files/${fileId}/preview`, {headers: auth()});
+  if(!res.ok){ if(win) win.close(); alert('该文件不支持预览'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  if(win) win.location = url; else window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 async function downloadAdminFile(fileId){

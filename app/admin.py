@@ -413,6 +413,40 @@ async def set_resource_status(
     return {"ok": True, "status": status}
 
 
+@router.get("/admin/resources/traffic")
+def admin_resource_traffic(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """资源下载流量：总量与按设备聚合。"""
+    require_admin(request, authorization)
+    with db(request) as conn:
+        totals = conn.execute(
+            """SELECT COUNT(*) AS requests,
+                      COALESCE(SUM(CASE WHEN mode = 'download' THEN 1 ELSE 0 END), 0) AS downloads,
+                      COALESCE(SUM(CASE WHEN mode = 'preview' THEN 1 ELSE 0 END), 0) AS previews,
+                      COALESCE(SUM(bytes), 0) AS bytes
+               FROM download_events"""
+        ).fetchone()
+        rows = conn.execute(
+            """SELECT e.device_id, d.device_serial, d.status,
+                      COUNT(*) AS requests,
+                      COALESCE(SUM(CASE WHEN e.mode = 'download' THEN 1 ELSE 0 END), 0) AS downloads,
+                      COALESCE(SUM(CASE WHEN e.mode = 'preview' THEN 1 ELSE 0 END), 0) AS previews,
+                      COALESCE(SUM(e.bytes), 0) AS bytes,
+                      MAX(e.created_at) AS last_at
+               FROM download_events e
+               LEFT JOIN devices d ON d.id = e.device_id
+               GROUP BY e.device_id
+               ORDER BY bytes DESC, requests DESC
+               LIMIT 200"""
+        ).fetchall()
+    return {
+        "totals": dict(totals),
+        "devices": [dict(r) for r in rows],
+    }
+
+
 @router.get("/admin/resources/files/{file_id}")
 def admin_resource_file(
     file_id: int,
@@ -431,6 +465,32 @@ def admin_resource_file(
     if not path.exists():
         fail(404, "resource_not_found", "文件不存在")
     return FileResponse(path, filename=row["name"])
+
+
+@router.get("/admin/resources/files/{file_id}/preview")
+def admin_resource_preview(
+    file_id: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """管理端内联预览 PDF；非 PDF 返回错误。"""
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    with db(request) as conn:
+        row = conn.execute(
+            "SELECT * FROM resource_files WHERE id = ?", (file_id,)
+        ).fetchone()
+    if row is None:
+        fail(404, "resource_not_found", "文件不存在")
+    path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
+    if not path.exists() or path.suffix.lower() != ".pdf":
+        fail(404, "preview_unsupported", "该文件不支持预览")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=row["name"],
+        content_disposition_type="inline",
+    )
 
 
 # ---------------------------------------------------------------- 页面

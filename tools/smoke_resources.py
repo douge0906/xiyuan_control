@@ -109,10 +109,26 @@ def main() -> int:
         assert files[0]["name"] == "gm.pdf"
         assert files[0]["area"] == "textbook"
 
-        # 下载通过的文件
-        dl = client.get(files[0]["downloadUrl"])
+        # 下载通过的文件（按设备计数）
+        dl = client.get(files[0]["downloadUrl"], headers=device)
         assert dl.status_code == 200, dl.text
         assert dl.content == b"%PDF-1.4 smoke"
+
+        # 预览不占下载额度，但计入流量
+        pv = client.get(files[0]["downloadUrl"] + "?mode=preview", headers=device)
+        assert pv.status_code == 200, pv.text
+
+        # 每日 10 次下载额度：已下载 1 次，再下 9 次后第 11 次应 429
+        for _ in range(9):
+            assert client.get(files[0]["downloadUrl"], headers=device).status_code == 200
+        quota = client.get(files[0]["downloadUrl"], headers=device)
+        assert quota.status_code == 429, quota.text
+        assert quota.json()["error"]["code"] == "download_quota"
+
+        traffic = client.get("/admin/resources/traffic", headers=admin)
+        assert traffic.status_code == 200, traffic.text
+        assert traffic.json()["totals"]["requests"] >= 11
+        assert traffic.json()["devices"]
 
         # 管理端默认只列待审（此时为空）
         pend = client.get("/admin/resources?status=pending", headers=admin).json()["items"]
