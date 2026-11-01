@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import content
+from . import security
 
 NAMES: tuple[str, ...] = ("app_release", "messages", "school_calendar", "exam_papers")
 MAX_BYTES = 512 * 1024
@@ -230,7 +231,8 @@ def history(content_dir: Path, name: str, limit: int = 10) -> list[dict[str, Any
         out.append({
             "file": item.name,
             "size": stat.st_size,
-            "savedAt": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            # 同 admin.py：必须带 +08:00，否则与 security 口径差 8 小时。
+            "savedAt": security.iso(datetime.fromtimestamp(stat.st_mtime, security.TZ)),
         })
     return out
 

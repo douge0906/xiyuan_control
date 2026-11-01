@@ -748,6 +748,12 @@ def download_resource(
         fail(400, "invalid_mode", "下载模式无效")
     device = require_device(request, authorization)
     cfg: Config = config(request)
+    # 🔴 文件存在性必须在**事务内、写计数之前**校验（2026-11-01 修）：
+    #    原来 path.exists() 写在 `with db()` 之外，而 download_events 插入与
+    #    downloads+1 在事务里提交 —— 文件被清理掉之后，用户拿到的是 404，
+    #    但当日配额已经扣了、下载数也虚增了一次。
+    #    现在把「查行 + 拼路径 + 校验存在」放在事务最前面，
+    #    校验不通过时 fail() 抛异常，DB.__exit__ 走 rollback，一个计数都不落。
     with db(request) as conn:
         row = conn.execute(
             """SELECT f.*, u.status FROM resource_files f
@@ -757,6 +763,10 @@ def download_resource(
         ).fetchone()
         if row is None or row["status"] != "approved":
             fail(404, "resource_missing", "资源不存在")
+
+        path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
+        if not path.exists():
+            fail(404, "resource_missing", "资源文件不存在")
 
         if mode == "download":
             today = security.iso()[:10]
@@ -780,9 +790,6 @@ def download_resource(
                 "UPDATE resource_files SET downloads = downloads + 1 WHERE id = ?",
                 (file_id,),
             )
-    path = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
-    if not path.exists():
-        fail(404, "resource_missing", "资源文件不存在")
     return FileResponse(path, filename=row["name"])
 
 

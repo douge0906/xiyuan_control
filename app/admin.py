@@ -204,7 +204,10 @@ def _content_meta(content_dir, name: str) -> dict[str, Any]:
         "name": name,
         "version": content.version(content_dir, name),
         "size": stat.st_size,
-        "updatedAt": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        # 统一走 security.iso(+08:00)：直接 datetime.fromtimestamp() 得到的是
+        # **naive 本地时间**，服务器没设 TZ=Asia/Shanghai 时会与其它时间字段差 8 小时
+        # （2026-11-01 修）。
+        "updatedAt": security.iso(datetime.fromtimestamp(stat.st_mtime, security.TZ)),
     }
 
 
