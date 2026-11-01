@@ -12,6 +12,12 @@ from typing import Any
 
 from . import security
 
+# 2026-11-02：归档设备（status='removed'）是设备去重留下的历史记录，
+# 只是为了让旧记录可追溯，不代表一台在用的设备。
+# 它不能进任何统计：概览卡片、版本/平台分布、新增趋势、DAU/WAU/MAU。
+_NOT_REMOVED = "status != 'removed'"
+_LIVE_DEVICE_IDS = "SELECT id FROM devices WHERE status != 'removed'"
+
 
 def overview(conn: sqlite3.Connection, content_dir) -> dict[str, Any]:
     today = security.today()
@@ -30,14 +36,29 @@ def overview(conn: sqlite3.Connection, content_dir) -> dict[str, Any]:
             "newToday": one("SELECT COUNT(*) FROM users WHERE created_at >= ?", today),
         },
         "devices": {
-            "total": one("SELECT COUNT(*) FROM devices"),
-            "newToday": one("SELECT COUNT(*) FROM devices WHERE created_at >= ?", today),
+            "total": one("SELECT COUNT(*) FROM devices WHERE " + _NOT_REMOVED),
+            "newToday": one(
+                "SELECT COUNT(*) FROM devices WHERE created_at >= ? AND " + _NOT_REMOVED,
+                today,
+            ),
             "banned": one("SELECT COUNT(*) FROM devices WHERE status='banned'"),
         },
         "active": {
-            "dau": one("SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day = ?", today),
-            "wau": one("SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?", d7),
-            "mau": one("SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?", d30),
+            "dau": one(
+                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day = ?"
+                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
+                today,
+            ),
+            "wau": one(
+                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?"
+                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
+                d7,
+            ),
+            "mau": one(
+                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?"
+                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
+                d30,
+            ),
         },
         "events": {
             "today": one("SELECT COUNT(*) FROM events WHERE ts LIKE ?", f"{today}%"),
@@ -56,7 +77,7 @@ def breakdown(conn: sqlite3.Connection, column: str, limit: int = 8) -> list[dic
         raise ValueError("unsupported column")
     rows = conn.execute(
         f"""SELECT COALESCE(NULLIF({column}, ''), '未知') AS name, COUNT(*) AS value
-            FROM devices GROUP BY name ORDER BY value DESC LIMIT ?""",
+            FROM devices WHERE {_NOT_REMOVED} GROUP BY name ORDER BY value DESC LIMIT ?""",
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -68,14 +89,15 @@ def series(conn: sqlite3.Connection, days: int = 30) -> list[dict[str, Any]]:
     new_devices = {
         r["day"]: r["value"] for r in conn.execute(
             """SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS value
-               FROM devices WHERE created_at >= ? GROUP BY day""",
+               FROM devices WHERE created_at >= ? AND status != 'removed' GROUP BY day""",
             (start,),
         )
     }
     active = {
         r["day"]: r["value"] for r in conn.execute(
-            """SELECT day, COUNT(DISTINCT device_id) AS value
-               FROM device_days WHERE day >= ? GROUP BY day""",
+            f"""SELECT day, COUNT(DISTINCT device_id) AS value
+                FROM device_days WHERE day >= ?
+                  AND device_id IN ({_LIVE_DEVICE_IDS}) GROUP BY day""",
             (start,),
         )
     }
