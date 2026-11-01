@@ -3,7 +3,7 @@
 布局：左侧固定侧边栏 + 右侧内容区；窄屏时侧边栏折成顶部横向导航。
 """
 
-ADMIN_HTML = """<!doctype html>
+ADMIN_HTML = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>掌上锡院 · 控制台</title>
