@@ -84,11 +84,140 @@ def metrics_breakdown(
 def admin_devices(
     request: Request,
     query: str = Query(default=""),
+    include_removed: bool = Query(default=False),
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_admin(request, authorization)
     with db(request) as conn:
-        return {"items": stats.devices(conn, query)}
+        return {"items": stats.devices(conn, query, include_removed=include_removed)}
+
+
+@router.get("/admin/devices/duplicates")
+def admin_device_duplicates(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """列出同一用户下的重复设备：每组留最后活跃的一台，其余是待归档的。
+
+    为什么会有重复：客户端的 installation_id 曾经是纯随机值，只存在本机安全存储，
+    卸载即失效 —— 用户每重装一次，控制台就多一台「新设备」。
+    这里只做「找出来」，不自动归档，交给后台按钮确认后再执行。
+    """
+    require_admin(request, authorization)
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT d.id, d.device_serial, d.platform, d.app_version, d.status,
+                      d.created_at, d.last_seen,
+                      (SELECT s.user_id FROM sessions s WHERE s.device_id = d.id
+                         ORDER BY s.created_at DESC LIMIT 1) AS user_id,
+                      (SELECT COUNT(*) FROM resource_uploads ru
+                         WHERE ru.device_id = d.id) AS uploads
+                 FROM devices d
+                WHERE d.status != 'removed'
+                ORDER BY d.last_seen DESC, d.id DESC"""
+        ).fetchall()
+        aliases = {
+            r["id"]: r["student_alias"]
+            for r in conn.execute("SELECT id, student_alias FROM users")
+        }
+
+    groups: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        if r["user_id"] is None:
+            continue
+        item = {
+            "id": r["id"],
+            "serial": r["device_serial"],
+            "platform": r["platform"],
+            "appVersion": r["app_version"],
+            "status": r["status"],
+            "createdAt": r["created_at"],
+            "lastSeen": r["last_seen"],
+            "uploads": r["uploads"],
+        }
+        g = groups.setdefault(
+            int(r["user_id"]),
+            {
+                "userId": int(r["user_id"]),
+                "alias": aliases.get(r["user_id"], ""),
+                "keep": None,
+                "extra": [],
+            },
+        )
+        # rows 已按 last_seen DESC 排好，组内第一台就是「最近活跃」→ 保留它。
+        if g["keep"] is None:
+            g["keep"] = item
+        else:
+            g["extra"].append(item)
+
+    out = [g for g in groups.values() if g["extra"]]
+    return {"groups": out, "count": sum(len(g["extra"]) for g in out)}
+
+
+@router.post("/admin/devices/archive")
+async def archive_devices(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """把重复设备标记为已归档：status='removed' + 撤销令牌与会话。
+
+    不删行：`resource_uploads.device_id` 还指着它，删了上传归属就断了。
+    归档设备若真的被装回来，`/api/v1/devices/register` 会自动把它复活。
+    """
+    require_admin(request, authorization)
+    try:
+        body = await request.json()
+    except Exception:
+        fail(400, "invalid_json", "请求体不是合法 JSON")
+    if not isinstance(body, dict):
+        fail(400, "invalid_json", "请求体必须是 JSON 对象")
+
+    raw_ids = body.get("deviceIds")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        fail(400, "invalid_device_ids", "缺少 deviceIds")
+    device_ids: list[int] = []
+    for value in raw_ids:
+        try:
+            device_ids.append(int(value))
+        except (TypeError, ValueError):
+            fail(400, "invalid_device_ids", "deviceIds 必须是整数数组")
+
+    raw_keep = body.get("keepId")
+    try:
+        keep_id = int(raw_keep) if raw_keep not in (None, "") else 0
+    except (TypeError, ValueError):
+        fail(400, "invalid_device_ids", "keepId 必须是整数")
+
+    stamp = security.iso()
+    archived: list[int] = []
+    with db(request) as conn:
+        for device_id in device_ids:
+            if device_id == keep_id:
+                continue
+            row = conn.execute(
+                "SELECT * FROM devices WHERE id = ?", (device_id,)
+            ).fetchone()
+            if row is None or row["status"] == "removed":
+                continue
+            conn.execute(
+                "UPDATE devices SET status = 'removed', merged_into = ? WHERE id = ?",
+                (keep_id, device_id),
+            )
+            conn.execute(
+                """UPDATE device_tokens SET revoked_at = ?
+                   WHERE device_id = ? AND revoked_at IS NULL""",
+                (stamp, device_id),
+            )
+            conn.execute(
+                """UPDATE sessions SET revoked_at = ?
+                   WHERE device_id = ? AND revoked_at IS NULL""",
+                (stamp, device_id),
+            )
+            archived.append(device_id)
+        if archived:
+            audit(conn, "device_archived",
+                  f"ids={archived} keep={keep_id}")
+    return {"ok": True, "archived": archived}
 
 
 @router.get("/admin/users")

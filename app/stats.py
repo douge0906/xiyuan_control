@@ -98,17 +98,25 @@ def series(conn: sqlite3.Connection, days: int = 30) -> list[dict[str, Any]]:
     return out
 
 
-def devices(conn: sqlite3.Connection, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+def devices(conn: sqlite3.Connection, query: str = "", limit: int = 50,
+            include_removed: bool = False) -> list[dict[str, Any]]:
+    # 2026-11-01 设备去重：status 多了一个 'removed'（归档的重复设备）。
+    # 默认不列出来，免得用户重装几次就把列表刷满；需要核对时带 include_removed。
     sql = """SELECT d.id, d.installation_id, d.platform, d.app_version, d.device_serial,
-                    d.status, d.created_at, d.last_seen,
+                    d.status, d.created_at, d.last_seen, d.merged_into,
                     (SELECT COUNT(*) FROM sessions s WHERE s.device_id = d.id
                        AND s.revoked_at IS NULL) AS sessions
-             FROM devices d"""
-    args: tuple = ()
+             FROM devices d
+             WHERE 1 = 1"""
+    args: list = []
+    if not include_removed:
+        sql += " AND d.status != 'removed'"
     if query:
-        sql += " WHERE d.device_serial LIKE ? OR d.installation_id LIKE ?"
-        args = (f"%{query}%", f"%{query}%")
-    sql += " ORDER BY d.last_seen DESC LIMIT ?"
+        sql += " AND (d.device_serial LIKE ? OR d.installation_id LIKE ?)"
+        args += [f"%{query}%", f"%{query}%"]
+    # last_seen 只精确到秒，同一秒内注册的多台会打平 —— 再用 id 兜底，
+    # 保证「保留最近活跃那台」这个判断始终确定（打平时保留更晚创建的那条）。
+    sql += " ORDER BY d.last_seen DESC, d.id DESC LIMIT ?"
     return [dict(r) for r in conn.execute(sql, (*args, limit))]
 
 

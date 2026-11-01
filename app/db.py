@@ -175,6 +175,11 @@ def init(db_path: Path) -> None:
         # 贡献者署名：上传时用户自愿填，空串 = 匿名（客户端不展示）。
         _ensure_column(conn, "resource_uploads", "contributor",
                        "TEXT NOT NULL DEFAULT ''")
+        # 设备去重（2026-11-01）：归档重复设备时记下「并到哪台」，0 = 没归档。
+        # 归档只改 status='removed' 并撤销令牌/会话，**不删行** ——
+        # resource_uploads.device_id 还指着它，删了会丢上传归属。
+        _ensure_column(conn, "devices", "merged_into",
+                       "INTEGER NOT NULL DEFAULT 0")
         # 旧版只按 uploads.area 记类型；补列后把教材/答案的旧记录纠正过来。
         conn.execute(
             """UPDATE resource_files

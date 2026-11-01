@@ -171,15 +171,36 @@ async def register_device(
                 "SELECT * FROM devices WHERE installation_id = ?", (installation_id,)
             ).fetchone()
         else:
-            if row["status"] != "active":
+            # 2026-11-01 设备去重配套改动：
+            #   installation_id 改为 ANDROID_ID 派生后，重装会带着**同一个** id
+            #   和**新的**密钥对回来。旧逻辑在这里 fail(409, device_key_conflict)，
+            #   等于把卸载重装的用户永久挡在门外，所以改为接受轮换：
+            #   换公钥 + 撤销该设备的旧令牌（旧令牌对应的私钥已不在那台机器上）。
+            if row["status"] == "banned":
                 fail(403, "device_banned", "设备已被封禁")
             if row["public_key"] != public_key:
-                fail(409, "device_key_conflict", "同一安装标识换了密钥，请重装应用")
+                conn.execute(
+                    "UPDATE devices SET public_key = ? WHERE id = ?",
+                    (public_key, row["id"]),
+                )
+                conn.execute(
+                    """UPDATE device_tokens SET revoked_at = ?
+                       WHERE device_id = ? AND revoked_at IS NULL""",
+                    (stamp, row["id"]),
+                )
+            if row["status"] == "removed":
+                # 归档过的设备装了回来 —— 复活，不要让人卡在「已归档」状态。
+                conn.execute(
+                    "UPDATE devices SET status = 'active', merged_into = 0 WHERE id = ?",
+                    (row["id"],),
+                )
             conn.execute(
                 "UPDATE devices SET platform = ?, app_version = ?, last_seen = ? WHERE id = ?",
                 (platform or row["platform"], app_version or row["app_version"], stamp, row["id"]),
             )
-            device = row
+            device = conn.execute(
+                "SELECT * FROM devices WHERE id = ?", (row["id"],)
+            ).fetchone()
 
         token = security.new_token()
         conn.execute(

@@ -257,8 +257,12 @@ ADMIN_HTML = """<!doctype html>
           <h3>设备列表</h3>
           <input id="q" class="field" style="width:240px;padding:8px 12px"
                  placeholder="搜索序列号 / 安装标识" oninput="loadDevices()">
+          <button class="btn" onclick="checkDuplicates()">检查重复设备</button>
         </div>
         <div style="overflow:auto;max-height:60vh"><table id="devTable"></table></div>
+        <p class="who" style="padding:6px 2px 0">
+          归档只是标记 + 撤销令牌，不删记录（上传归属还挂着它）；若那台设备装回来会自动复活。
+        </p>
       </div>
     </section>
 
@@ -451,17 +455,54 @@ async function loadDevices(){
     + d.items.map(x => `<tr>
       <td class="mono">${esc(x.device_serial)}</td><td>${esc(x.platform||'-')}</td>
       <td>${esc(x.app_version||'-')}</td>
-      <td>${x.status==='active'?'<span class="pill ok">正常</span>':'<span class="pill bad">已封禁</span>'}</td>
+      <td>${x.status==='active'?'<span class="pill ok">正常</span>'
+        :x.status==='removed'?'<span class="pill">已归档</span>'
+        :'<span class="pill bad">已封禁</span>'}</td>
       <td>${x.sessions}</td><td class="mono">${esc(x.last_seen)}</td>
-      <td><button class="btn" style="padding:4px 10px;font-size:12px"
+      <td>${x.status==='removed'
+        ? '<span class="who">已归档</span>'
+        : `<button class="btn" style="padding:4px 10px;font-size:12px"
         onclick="toggleDevice(${x.id},'${x.status==='active'?'banned':'active'}')">
-        ${x.status==='active'?'封禁':'恢复'}</button></td></tr>`).join('')
+        ${x.status==='active'?'封禁':'恢复'}</button>`}</td></tr>`).join('')
     + '</tbody>';
 }
 
 async function toggleDevice(id, status){
   await api(`/admin/devices/${id}/status`, {method:'PATCH',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
+  loadDevices();
+}
+
+/**
+ * 检查同一用户下的重复设备。
+ *
+ * 成因：客户端 installation_id 以前是纯随机值、只存在本机安全存储，卸载即失效，
+ * 所以用户每重装一次这里就多一台「新设备」。2026-11-01 起改为 ANDROID_ID 派生，
+ * 重装不再产生新设备；历史遗留的这些需要手工归档一次。
+ * 每组保留最近活跃的一台，其余归档（撤销令牌与会话，不删记录）。
+ */
+async function checkDuplicates(){
+  const d = await api('/admin/devices/duplicates');
+  if(!d.count){
+    alert('没有发现重复设备。');
+    return;
+  }
+  const lines = d.groups.map(g => {
+    const keep = `${g.keep.serial}（${g.keep.lastSeen}）`;
+    const extra = g.extra.map(x => `${x.serial}（${x.lastSeen}）`).join('、');
+    return `用户 ${(g.alias||'').slice(0,10)}…\n  保留：${keep}\n  归档：${extra}`;
+  });
+  const msg = `发现 ${d.count} 台重复设备：\n\n${lines.join('\n\n')}\n\n确认归档？`
+    + '\n（只撤销令牌与会话，不删记录；归档设备装回来会自动复活）';
+  if(!confirm(msg)) return;
+  let total = 0;
+  for(const g of d.groups){
+    const r = await api('/admin/devices/archive', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({deviceIds: g.extra.map(x => x.id), keepId: g.keep.id})});
+    total += (r.archived || []).length;
+  }
+  alert('已归档 ' + total + ' 台重复设备。');
   loadDevices();
 }
 
