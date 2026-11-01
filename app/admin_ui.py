@@ -734,7 +734,8 @@ async function loadResources(){
   $('resTable').innerHTML =
     '<thead><tr><th>课程 / 教材</th><th>区域</th><th>备注</th><th>文件</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
     + d.items.map(x => `<tr>
-      <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div></td>
+      <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div>`
+      + (x.contributor ? `<div class="who">贡献者：${esc(x.contributor)}</div>` : '') + `</td>
       <td>${esc(RES_AREA[x.area] || x.area)}</td>
       <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
       <td><div class="feedback-content">${x.files.map(f =>

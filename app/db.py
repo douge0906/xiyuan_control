@@ -172,6 +172,9 @@ def init(db_path: Path) -> None:
                        "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "resource_files", "parent_id",
                        "INTEGER NOT NULL DEFAULT 0")
+        # 贡献者署名：上传时用户自愿填，空串 = 匿名（客户端不展示）。
+        _ensure_column(conn, "resource_uploads", "contributor",
+                       "TEXT NOT NULL DEFAULT ''")
         # 旧版只按 uploads.area 记类型；补列后把教材/答案的旧记录纠正过来。
         conn.execute(
             """UPDATE resource_files

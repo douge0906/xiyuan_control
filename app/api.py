@@ -572,6 +572,7 @@ async def create_resource_upload(
     book_name: str = Form(""),
     area: str = Form(...),
     note: str = Form(""),
+    contributor: str = Form(""),
     files: list[UploadFile] = File(...),
     answer_files: list[UploadFile] | None = File(default=None),
 ) -> dict[str, Any]:
@@ -586,6 +587,7 @@ async def create_resource_upload(
     book = book_name.strip()
     area = area.strip()
     note = note.strip()
+    contributor = contributor.strip()
     if not course or len(course) > 256 or "\n" in course or "\r" in course:
         fail(400, "invalid_course", "课程名称无效")
     if len(book) > 256 or "\n" in book or "\r" in book:
@@ -594,6 +596,8 @@ async def create_resource_upload(
         fail(400, "invalid_area", "上传区域无效")
     if len(note) > 500:
         fail(400, "note_too_long", "备注最多 500 字")
+    if len(contributor) > 32 or "\n" in contributor or "\r" in contributor:
+        fail(400, "invalid_contributor", "署名无效（最多 32 字，不能换行）")
 
     if area == "textbook":
         main_kind = "textbook"
@@ -619,9 +623,10 @@ async def create_resource_upload(
     with db(request) as conn:
         cur = conn.execute(
             """INSERT INTO resource_uploads
-               (device_id, course_name, book_name, area, note, status, created_at)
-               VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
-            (device["id"], course, book, area, note, stamp),
+               (device_id, course_name, book_name, area, note, contributor,
+                status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (device["id"], course, book, area, note, contributor, stamp),
         )
         upload_id = cur.lastrowid
 
@@ -698,7 +703,7 @@ def list_resources(request: Request) -> dict[str, Any]:
     with db(request) as conn:
         rows = conn.execute(
             """SELECT u.id AS upload_id, u.course_name, u.book_name,
-                      u.reviewed_at, u.created_at,
+                      u.contributor, u.reviewed_at, u.created_at,
                       f.id AS file_id, f.name, f.size, f.kind,
                       f.downloads, f.parent_id
                FROM resource_uploads u
@@ -730,6 +735,7 @@ def list_resources(request: Request) -> dict[str, Any]:
                 "size": row["size"],
                 "downloads": row["downloads"],
                 "parentId": row["parent_id"],
+                "contributor": row["contributor"] or "",
                 "createdAt": stamp,
                 "downloadUrl": f"/api/v1/resources/files/{row['file_id']}",
             }
@@ -820,6 +826,7 @@ def my_resource_uploads(
                     "bookName": row["book_name"],
                     "area": row["area"],
                     "note": row["note"],
+                    "contributor": row["contributor"] or "",
                     "status": row["status"],
                     "reviewNote": row["review_note"],
                     "createdAt": row["created_at"],

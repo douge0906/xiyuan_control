@@ -368,6 +368,7 @@ def admin_resources(
                     "bookName": row["book_name"],
                     "area": row["area"],
                     "note": row["note"],
+                    "contributor": row["contributor"] or "",
                     "status": row["status"],
                     "reviewNote": row["review_note"],
                     "createdAt": row["created_at"],
