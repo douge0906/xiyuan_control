@@ -57,6 +57,10 @@ ADMIN_HTML = r"""<!doctype html>
   .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;
              padding:12px 10px 0;border-top:1px solid var(--line)}
   .side-foot .who{font-size:11.5px;color:var(--sub);line-height:1.5}
+  .side-foot .beian{font-size:10.5px;color:var(--sub);opacity:.85;
+                    line-height:1.5;letter-spacing:.1px}
+  .side-foot .beian a{color:inherit;text-decoration:none}
+  .side-foot .beian a:hover{text-decoration:underline}
 
   /* ---------- 主区 ---------- */
   .main{flex:1;min-width:0;padding:22px 26px 56px}
@@ -219,6 +223,7 @@ ADMIN_HTML = r"""<!doctype html>
     <div class="side-foot">
       <div class="who" id="stamp">—</div>
       <button class="btn ghost" onclick="logout()" style="text-align:left">退出登录</button>
+      <div class="beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">苏ICP备2026052960号-1</a></div>
     </div>
   </aside>
 

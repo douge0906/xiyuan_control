@@ -23,6 +23,8 @@ PRIVACY_HTML = """<!doctype html>
   code{background:#F4F4F8;padding:1px 5px;border-radius:5px;font-size:13px}
   .note{background:#FBFAFF;border:1px solid #E7E1FA;border-radius:12px;padding:12px 14px;margin:14px 0}
   footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);color:var(--sub);font-size:13px}
+  footer a{color:#5B3FC4;text-decoration:none}
+  footer a:hover{text-decoration:underline}
   a{color:#5B3FC4}
   @media(max-width:600px){.card{padding:24px 18px}}
 </style></head>
@@ -123,6 +125,7 @@ PRIVACY_HTML = """<!doctype html>
 
 <footer>
 开发者：掌上锡院个人开发者　|　本应用为非官方工具，与无锡学院无隶属关系<br>
+备案号：<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">苏ICP备2026052960号-1</a><br>
 本政策最后更新：2026 年 10 月 19 日
 </footer>
 
