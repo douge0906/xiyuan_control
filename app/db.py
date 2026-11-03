@@ -8,6 +8,7 @@ device_days / risk_events / audit_logs
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 SCHEMA = """
@@ -201,20 +202,43 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str,
 
 
 class DB:
-    """极薄的连接包装：每次操作开新连接，省去跨线程问题。"""
+    """极薄的连接包装：每次操作开新连接，省去跨线程问题。
+
+    连接**按线程**隔离（2026-11-03 修）。原先存在 `self.conn` 这个实例属性上，
+    而全进程只有一个 DB 实例（main.py 的 app.state.db），FastAPI 的同步路由
+    又跑在线程池里 —— 两个并发请求会互相覆盖 `self.conn`，`__exit__` 于是
+    commit/close 了**别人的**连接，自己那笔未提交的写事务连人带锁留在 WAL 里：
+
+      1) 被关掉那一路抛 sqlite3.ProgrammingError（SQLite objects created in a
+         thread can only be used in that same thread）→ 秒回 500，读路由 ~50%;
+      2) 泄漏的写事务一直持有写锁，后续所有写请求卡满 busy_timeout(10s) 再抛
+         database is locked → 慢回 500，写路由 100%，且不重启不自愈。
+
+    不要改成 `check_same_thread=False` 绕过：那只是把报错换成静默的跨线程
+    使用同一个连接，事务边界会互相穿插。
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._local = threading.local()
 
     def __enter__(self) -> sqlite3.Connection:
-        self.conn = connect(self.path)
-        return self.conn
+        conn = connect(self.path)
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        stack.append(conn)
+        return conn
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        stack = getattr(self._local, "stack", None)
+        if not stack:
+            return
+        conn = stack.pop()
         try:
             if exc_type is None:
-                self.conn.commit()
+                conn.commit()
             else:
-                self.conn.rollback()
+                conn.rollback()
         finally:
-            self.conn.close()
+            conn.close()

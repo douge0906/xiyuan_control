@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -14,6 +15,8 @@ from .privacy import PRIVACY_HTML
 from .security import iso as iso_now
 
 APP_VERSION = "0.6.0"
+
+logger = logging.getLogger("xiyuan_control")
 
 app = FastAPI(
     title="掌上锡院控制台",
@@ -63,7 +66,16 @@ async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
 
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-    return _error(500, "server_error", "服务器内部错误", request.state.request_id)
+    # 未捕获异常必须留下 traceback（2026-11-03 修）。
+    # 原来这里只返回统一文案、什么都不记 —— 线上「服务器内部错误」只能靠猜，
+    # db.py 的并发缺陷因此藏了很久。响应体仍然不泄露内部信息，日志里记全量。
+    request_id = getattr(request.state, "request_id", "-")
+    logger.error(
+        "unhandled error request_id=%s %s %s",
+        request_id, request.method, request.url.path,
+        exc_info=exc,
+    )
+    return _error(500, "server_error", "服务器内部错误", request_id)
 
 
 @app.get("/")
