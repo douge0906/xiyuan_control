@@ -128,10 +128,11 @@ ADMIN_HTML = r"""<!doctype html>
   .panel h3{font-size:13px;color:var(--ink);margin:0;font-weight:650;letter-spacing:.2px}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)}
   .chart{display:flex;align-items:flex-end;gap:4px;height:140px;padding-top:4px}
-  .col{flex:1;display:flex;align-items:flex-end;gap:2px;height:100%;
+  /* 30 根柱在窄屏也要塞得下：允许列收缩，柱子最小 2px */
+  .col{flex:1;min-width:0;display:flex;align-items:flex-end;gap:2px;height:100%;
        border-radius:4px;transition:background .12s}
   .col:hover{background:#FBFAFF}
-  .bar{flex:1;background:var(--accent);opacity:.85;border-radius:4px 4px 2px 2px;min-width:5px}
+  .bar{flex:1;min-width:2px;background:var(--accent);opacity:.85;border-radius:4px 4px 2px 2px}
   .bar.alt{background:#185FA5;opacity:.45}
   .legend{display:flex;gap:var(--sp-3);font-size:var(--fs-sm);color:var(--sub);margin-top:10px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:5px}
@@ -261,15 +262,16 @@ ADMIN_HTML = r"""<!doctype html>
     .shell{flex-direction:column}
     .side{width:auto;flex:none;height:auto;position:static;flex-direction:row;
           align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-3);
-          overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);
-          -webkit-overflow-scrolling:touch}
+          overflow:hidden;border-right:0;border-bottom:1px solid var(--line)}
     .brand{padding:0;flex:none}
     .brand span{display:none}
-    nav{flex-direction:row;gap:4px}
-    nav a{padding:8px 10px}
+    /* 窄屏只留图标：nav 自动换行成两排，8 个入口一屏看全，不用横向滚 */
+    nav{flex:1 1 auto;min-width:0;flex-direction:row;flex-wrap:wrap;gap:2px 4px;
+        justify-content:flex-start}
+    nav a{padding:7px 8px}
     nav a span{display:none}
     nav a.on{box-shadow:inset 0 -3px 0 var(--accent)}
-    .side-foot{margin:0 0 0 auto;padding:0;border:0;flex-direction:row;align-items:center}
+    .side-foot{margin:0;padding:0;border:0;flex:none;flex-direction:row;align-items:center}
     .side-foot .who,.side-foot .beian{display:none}
     .main{padding:var(--sp-3) var(--sp-3) 40px}
     .topbar{margin-bottom:var(--sp-3)}
@@ -285,6 +287,9 @@ ADMIN_HTML = r"""<!doctype html>
     .panel .hd{gap:var(--sp-2)}
     .panel .hd .ctl,.panel .hd .ctl-sm,.panel .hd .field{flex:1 1 100%}
     .feedback-content{max-width:none;min-width:180px}
+    /* 窄屏历史备份：文件名与时间换两行，别把文件名截成 "...202-" */
+    .history-row{flex-wrap:wrap;row-gap:2px}
+    .history-row .mono{flex:1 1 100%}
     .modal{max-width:100%;padding:var(--sp-4)}
     .modal .foot .btn{flex:1}
   }
