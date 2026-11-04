@@ -7,17 +7,32 @@ ADMIN_HTML = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>掌上锡院 · 控制台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231F2937'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='2.4'%3E%3Crect x='8' y='8' width='6' height='6' rx='1.5'/%3E%3Crect x='18' y='8' width='6' height='6' rx='1.5'/%3E%3Crect x='8' y='18' width='6' height='6' rx='1.5'/%3E%3Cpath d='M18 21h6m0 0-2-2m2 2-2 2'/%3E%3C/g%3E%3C/svg%3E">
+<meta name="color-scheme" content="light">
 <style>
+  /* 设计令牌：间距 / 圆角 / 字号 / 控件高度只在这里定义一次，
+     下面的组件不再各自写死 px（2026-11-04 UI 收敛）。 */
   :root{
     --ink:#1F2937; --sub:#6B7280; --line:#E8E8EE; --bg:#F6F7FB;
     --accent:#6C4FD9; --accent-weak:#F2EEFF; --warn:#DC2626; --warn-weak:#FEF2F2;
     --ok:#0F6E56; --ok-weak:#ECFDF5;
+    --hover:#FAF9FF; --line-soft:#F3F3F7;
+
+    --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px;
+    --r-xs:8px; --r-sm:10px; --r-md:12px; --r-lg:16px; --r-xl:20px;
+    --fs-xs:11px; --fs-sm:12px; --fs-md:14px; --fs-lg:17px; --fs-xl:19px;
+    --ctl:34px; --ctl-sm:28px; --ctl-xs:24px;
+    --shadow-2:0 10px 34px rgba(24,24,40,.10);
+    --ring:0 0 0 3px var(--accent-weak);
   }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
-       background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
-  button{font:inherit;cursor:pointer}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+       font-size:var(--fs-md);line-height:1.6;background:var(--bg);color:var(--ink);
+       -webkit-font-smoothing:antialiased}
+  button{font:inherit;cursor:pointer;color:inherit}
+  ::selection{background:var(--accent-weak);color:#4B32A8}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
   /* ---------- 登录 ---------- */
   .login-wrap{min-height:100%;display:grid;place-items:center;padding:24px}
@@ -27,133 +42,255 @@ ADMIN_HTML = r"""<!doctype html>
                display:grid;place-items:center;margin-bottom:14px}
   .login h2{font-size:17px;margin:0 0 4px;font-weight:650}
   .login p{margin:0 0 16px}
-  .field{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:11px;
-         font:inherit;background:#FAFAFC;outline:none}
-  .field:focus{border-color:#C9BDF5;background:#fff;box-shadow:0 0 0 3px #F2EEFF}
-  .btn{border:1px solid var(--line);background:#fff;border-radius:11px;padding:9px 14px}
-  .btn:hover{background:#FAFAFC}
-  .btn.primary{background:var(--ink);border-color:var(--ink);color:#fff;width:100%;margin-top:12px}
-  .btn.primary:hover{opacity:.92}
-  .btn.ghost{border-color:transparent;color:var(--sub)}
-  .err{color:var(--warn);font-size:12px;margin-top:10px;min-height:18px}
+  .field{width:100%;height:42px;padding:0 13px;border:1px solid var(--line);
+         border-radius:var(--r-md);font:inherit;font-size:var(--fs-md);
+         color:inherit;background:#FAFAFC;outline:none;
+         transition:border-color .12s,background .12s,box-shadow .12s}
+  .field:focus{border-color:#C9BDF5;background:#fff;box-shadow:var(--ring)}
+  .field::placeholder{color:#9CA3AF}
+  .login .btn.primary{width:100%;margin-top:var(--sp-3)}
+  .login .hint{margin-bottom:var(--sp-3)}
+
+  /* 按钮：高度 / 圆角 / 字号统一，危险操作用 .danger，二次确认为主按钮 */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+       height:var(--ctl);padding:0 var(--sp-3);border:1px solid var(--line);
+       background:#fff;border-radius:var(--r-sm);font-size:var(--fs-md);
+       text-decoration:none;white-space:nowrap;
+       transition:background .12s,border-color .12s,color .12s,opacity .12s}
+  .btn:hover{background:var(--hover);border-color:#DAD8E6}
+  .btn:active{transform:translateY(1px)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn.sm{height:var(--ctl-sm);padding:0 10px;font-size:var(--fs-sm);border-radius:var(--r-xs)}
+  .btn.xs{height:var(--ctl-xs);padding:0 9px;font-size:var(--fs-xs);border-radius:6px}
+  .btn.block{width:100%}
+  .btn.primary,.btn.primary-sm{background:var(--ink);border-color:var(--ink);color:#fff}
+  .btn.primary:hover,.btn.primary-sm:hover{background:#111827;border-color:#111827}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--sub)}
+  .btn.ghost:hover{background:var(--hover);color:var(--ink);border-color:transparent}
+  .btn.danger{color:#B91C1C;border-color:#F3C6C6;background:#fff}
+  .btn.danger:hover{background:var(--warn-weak);border-color:#EBA9A9}
+  .btn.danger-solid{background:var(--warn);border-color:var(--warn);color:#fff}
+  .btn.danger-solid:hover{background:#B91C1C;border-color:#B91C1C}
+  .err{color:var(--warn);font-size:var(--fs-sm);margin-top:10px;min-height:18px}
+  .hint{font-size:var(--fs-sm);color:var(--sub);margin:var(--sp-2) 0 0;line-height:1.6}
 
   /* ---------- 外壳 ---------- */
   .shell{display:flex;min-height:100%}
   .side{width:236px;flex:0 0 236px;background:#fff;border-right:1px solid var(--line);
-        display:flex;flex-direction:column;padding:18px 14px;gap:6px;
+        display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3);gap:6px;
         position:sticky;top:0;height:100vh}
-  .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 16px}
+  .brand{display:flex;align-items:center;gap:10px;padding:2px var(--sp-2) var(--sp-4)}
   .brand .mark{width:30px;height:30px;border-radius:9px;background:var(--ink);
                display:grid;place-items:center;flex:none}
-  .brand b{font-size:14px;font-weight:650;letter-spacing:.2px}
-  .brand span{display:block;font-size:11px;color:var(--sub);font-weight:400}
+  .brand b{font-size:var(--fs-md);font-weight:650;letter-spacing:.2px}
+  .brand span{display:block;font-size:var(--fs-xs);color:var(--sub);font-weight:400}
   nav{display:flex;flex-direction:column;gap:2px}
-  nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;
+  nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r-sm);
         color:var(--sub);text-decoration:none;font-size:13.5px;cursor:pointer;
-        transition:background .12s,color .12s}
+        border:1px solid transparent;transition:background .12s,color .12s,border-color .12s}
   nav a:hover{background:#F7F7FA;color:var(--ink)}
-  nav a.on{background:var(--accent-weak);color:#5B3FC4;font-weight:600}
+  /* 当前页：左侧 3px 主色条 + 实底 + 加粗，比只换底色明显 */
+  nav a.on{background:var(--accent-weak);color:#4B32A8;font-weight:650;
+           border-color:#E3DAFF;box-shadow:inset 3px 0 0 var(--accent)}
   nav a svg{width:16px;height:16px;flex:none;opacity:.9}
-  .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;
-             padding:12px 10px 0;border-top:1px solid var(--line)}
-  .side-foot .who{font-size:11.5px;color:var(--sub);line-height:1.5}
+  nav a.on svg{opacity:1}
+  .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:var(--sp-2);
+             padding:var(--sp-3) var(--sp-2) 0;border-top:1px solid var(--line)}
+  .side-foot .who{font-size:var(--fs-sm);color:var(--sub);line-height:1.5}
   .side-foot .beian{font-size:10.5px;color:var(--sub);opacity:.85;
                     line-height:1.5;letter-spacing:.1px}
   .side-foot .beian a{color:inherit;text-decoration:none}
   .side-foot .beian a:hover{text-decoration:underline}
 
   /* ---------- 主区 ---------- */
-  .main{flex:1;min-width:0;padding:22px 26px 56px}
-  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:12px}
-  .topbar h1{font-size:19px;margin:0;font-weight:650;letter-spacing:-.2px}
-  .topbar .sub{font-size:12px;color:var(--sub);margin-top:2px}
-  .actions{display:flex;gap:8px}
+  .main{flex:1;min-width:0;padding:var(--sp-5) var(--sp-6) 56px}
+  .topbar{display:flex;align-items:flex-end;justify-content:space-between;
+          margin-bottom:var(--sp-4);gap:var(--sp-3);flex-wrap:wrap}
+  .topbar h1{font-size:var(--fs-xl);margin:0;font-weight:650;letter-spacing:-.2px}
+  .topbar .sub{font-size:var(--fs-sm);color:var(--sub);margin-top:2px}
+  .actions{display:flex;gap:var(--sp-2);flex-wrap:wrap}
 
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:16px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 16px}
-  .card .l{font-size:11.5px;color:var(--sub);display:flex;justify-content:space-between}
-  .card .n{font-size:26px;font-weight:660;letter-spacing:-.6px;margin-top:6px;font-variant-numeric:tabular-nums}
-  .card .h{font-size:11px;color:var(--sub);margin-top:2px}
-  .card.accent{background:linear-gradient(180deg,#FBFAFF,#fff)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+         gap:var(--sp-3);margin-bottom:var(--sp-4)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+        padding:var(--sp-3) var(--sp-4);transition:box-shadow .15s,border-color .15s}
+  .card:hover{box-shadow:0 4px 16px rgba(24,24,40,.06)}
+  .card .l{font-size:var(--fs-xs);color:var(--sub);display:flex;justify-content:space-between}
+  .card .n{font-size:26px;font-weight:660;letter-spacing:-.6px;margin-top:6px;
+           font-variant-numeric:tabular-nums;line-height:1.2}
+  .card .h{font-size:var(--fs-xs);color:var(--sub);margin-top:2px}
+  .card.accent{background:linear-gradient(180deg,#FBFAFF,#fff);border-color:#E3DAFF}
 
-  .panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
-  .panel .hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-  .panel h3{font-size:12.5px;color:var(--sub);margin:0;font-weight:600;letter-spacing:.3px}
-  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .chart{display:flex;align-items:flex-end;gap:4px;height:132px;padding-top:4px}
-  .col{flex:1;display:flex;align-items:flex-end;gap:2px;height:100%}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+         padding:var(--sp-4);margin-bottom:var(--sp-3)}
+  .panel .hd{display:flex;align-items:center;justify-content:space-between;
+             gap:var(--sp-2);margin-bottom:var(--sp-3);flex-wrap:wrap}
+  .panel h3{font-size:13px;color:var(--ink);margin:0;font-weight:650;letter-spacing:.2px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)}
+  .chart{display:flex;align-items:flex-end;gap:4px;height:140px;padding-top:4px}
+  .col{flex:1;display:flex;align-items:flex-end;gap:2px;height:100%;
+       border-radius:4px;transition:background .12s}
+  .col:hover{background:#FBFAFF}
   .bar{flex:1;background:var(--accent);opacity:.85;border-radius:4px 4px 2px 2px;min-width:5px}
   .bar.alt{background:#185FA5;opacity:.45}
-  .legend{display:flex;gap:14px;font-size:11.5px;color:var(--sub);margin-top:10px}
+  .legend{display:flex;gap:var(--sp-3);font-size:var(--fs-sm);color:var(--sub);margin-top:10px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:5px}
   .row{display:grid;grid-template-columns:112px 1fr 44px;gap:10px;align-items:center;margin:7px 0}
-  .row .k{font-size:12px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .k{font-size:var(--fs-sm);color:var(--sub);overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap}
   .track{background:#F2F1F7;height:7px;border-radius:4px;overflow:hidden}
   .track i{display:block;height:100%;background:var(--accent);opacity:.65;border-radius:4px}
-  .row .v{text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--sub)}
+  .row .v{text-align:right;font-size:var(--fs-sm);font-variant-numeric:tabular-nums;color:var(--sub)}
 
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #F3F3F7;white-space:nowrap}
-  th{color:var(--sub);font-weight:600;font-size:11.5px;letter-spacing:.3px;
-     position:sticky;top:0;background:#fff}
-  tbody tr:hover{background:#FBFAFE}
-  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#4B5563}
-  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;
-        background:var(--accent-weak);color:#5B3FC4}
+  /* ---------- 表格 ---------- */
+  /* 滚动容器统一用 .table-wrap，不再各处内联 overflow/max-height */
+  .table-wrap{overflow:auto;max-height:60vh;border:1px solid var(--line-soft);
+              border-radius:var(--r-md);margin-top:2px}
+  .table-wrap.short{max-height:34vh}
+  table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+  th,td{text-align:left;padding:10px var(--sp-3);border-bottom:1px solid var(--line-soft);
+        white-space:nowrap;vertical-align:middle}
+  th{color:var(--sub);font-weight:600;font-size:var(--fs-xs);letter-spacing:.3px;
+     position:sticky;top:0;z-index:1;background:#FCFCFE;
+     box-shadow:inset 0 -1px 0 var(--line)}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr{transition:background .1s}
+  tbody tr:hover{background:var(--hover)}
+  tbody tr.is-click{cursor:pointer}
+  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:var(--fs-sm);
+          color:#4B5563}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:var(--fs-xs);
+        background:var(--accent-weak);color:#5B3FC4;white-space:nowrap}
   .pill.bad{background:var(--warn-weak);color:#B91C1C}
   .pill.ok{background:var(--ok-weak);color:var(--ok)}
-  .empty{color:var(--sub);font-size:12.5px;padding:18px 4px;text-align:center}
+  .empty{color:var(--sub);font-size:12.5px;padding:28px var(--sp-4);text-align:center}
+  .empty small{display:block;font-size:var(--fs-xs);opacity:.8;margin-top:4px}
+  /* 加载态：表格骨架行 + 顶部细进度条，避免切 tab 时白屏无反馈 */
+  .loading{display:flex;align-items:center;justify-content:center;gap:var(--sp-2);
+           padding:34px var(--sp-4);color:var(--sub);font-size:12.5px}
+  .spinner{width:16px;height:16px;border:2px solid var(--line);
+           border-top-color:var(--accent);border-radius:50%;
+           animation:spin .7s linear infinite;flex:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .skl{height:11px;border-radius:6px;
+       background:linear-gradient(90deg,#F1F0F6 25%,#F8F7FC 37%,#F1F0F6 63%);
+       background-size:400% 100%;animation:shimmer 1.3s ease infinite}
+  @keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+  .table-actions{display:inline-flex;gap:6px;align-items:center;flex-wrap:nowrap}
   .hide{display:none!important}
+
+  /* 行内错误条：加载失败时贴在面板顶部，不静默 */
+  .load-error{display:flex;align-items:center;gap:var(--sp-2);margin-top:var(--sp-2);
+              padding:10px var(--sp-3);border-radius:var(--r-sm);
+              background:var(--warn-weak);border:1px solid #F3C6C6;color:#B91C1C;
+              font-size:12.5px}
+  .load-error .btn{margin-left:auto}
 
   /* ---------- 内容管理 ---------- */
   .tabs{display:flex;flex-wrap:wrap;gap:4px;padding:3px;background:#F3F2F8;
-         border:1px solid var(--line);border-radius:11px;margin-bottom:14px}
-  .tabs button{border:0;background:transparent;color:var(--sub);padding:7px 12px;
-               border-radius:8px;font-size:12.5px}
+         border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:var(--sp-3)}
+  .tabs button{border:0;background:transparent;color:var(--sub);padding:7px var(--sp-3);
+               border-radius:var(--r-sm);font-size:var(--fs-sm);transition:background .12s}
+  .tabs button:hover{color:var(--ink)}
   .tabs button.on{background:#fff;color:var(--ink);font-weight:650;
                   box-shadow:0 1px 4px rgba(24,24,40,.08)}
   .tabs button small{display:block;font-size:10px;color:var(--sub);font-weight:400}
-  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)}
   .form-grid .full{grid-column:1/-1}
-  .form-grid label,.field-label{display:block;font-size:12px;color:var(--sub);margin-bottom:5px}
+  .form-grid label,.field-label{display:block;font-size:var(--fs-sm);color:var(--sub);
+                                margin-bottom:5px}
   .input,.textarea{width:100%;padding:9px 11px;border:1px solid var(--line);
-                   border-radius:9px;background:#FAFAFC;outline:none;font:inherit}
-  .input:focus,.textarea:focus{border-color:#C9BDF5;background:#fff;
-                               box-shadow:0 0 0 3px #F2EEFF}
+                   border-radius:var(--r-xs);background:#FAFAFC;outline:none;
+                   font:inherit;color:inherit;
+                   transition:border-color .12s,background .12s,box-shadow .12s}
+  .input{height:var(--ctl)}
+  .input:focus,.textarea:focus{border-color:#C9BDF5;background:#fff;box-shadow:var(--ring)}
   .textarea{min-height:96px;resize:vertical;line-height:1.65}
   .jsonarea{min-height:360px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-            font-size:12px;line-height:1.6;white-space:pre;overflow:auto}
-  .editor-actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
-  .editor-actions .msg{font-size:12px;color:var(--sub);margin-right:auto}
+            font-size:var(--fs-sm);line-height:1.6;white-space:pre;overflow:auto}
+  /* 表格上方的小控件（搜索框 / 下拉筛选）统一尺寸 */
+  .ctl{width:200px}
+  .ctl-sm{width:150px}
+  .editor-actions{display:flex;align-items:center;gap:var(--sp-2);
+                  margin-top:var(--sp-3);flex-wrap:wrap}
+  .editor-actions.top{margin:0 0 var(--sp-3)}
+  .history-wrap{margin-top:var(--sp-4);padding-top:var(--sp-3);
+                border-top:1px solid var(--line)}
+  .history-wrap .field-label{margin-bottom:var(--sp-1)}
+  .editor-actions .msg{font-size:var(--fs-sm);color:var(--sub);margin-right:auto}
   .editor-actions .msg.bad{color:var(--warn)}
   .editor-actions .msg.ok{color:var(--ok)}
-  .btn.primary-sm{background:var(--ink);border-color:var(--ink);color:#fff}
-  .btn.danger{color:#B91C1C;border-color:#F3C6C6}
-  .msg-item{border:1px solid var(--line);border-radius:12px;padding:12px;
+  .msg-item{border:1px solid var(--line);border-radius:var(--r-md);padding:var(--sp-3);
             margin-bottom:10px;background:#FCFCFE}
-  .msg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-  .msg-head b{font-size:12px;color:var(--sub);font-weight:600}
+  .msg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-2)}
+  .msg-head b{font-size:var(--fs-sm);color:var(--sub);font-weight:600}
   .msg-item .form-grid{grid-template-columns:1fr 1fr}
   .feedback-content{white-space:normal;max-width:440px;line-height:1.55}
   .history-row{display:flex;align-items:center;gap:10px;padding:7px 0;
-               border-bottom:1px solid #F3F3F7;font-size:12.5px}
+               border-bottom:1px solid var(--line-soft);font-size:12.5px}
   .history-row:last-child{border-bottom:0}
   .history-row .mono{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .history-row .muted{flex:none}
-  .muted{color:var(--sub);font-size:12px}
+  .muted{color:var(--sub);font-size:var(--fs-sm)}
+  .who{font-size:var(--fs-sm);color:var(--sub);line-height:1.5}
+  .panel-note{font-size:var(--fs-sm);color:var(--sub);line-height:1.6;
+              margin:var(--sp-2) 0 0}
+
+  /* ---------- 确认弹窗（替换 confirm()，危险操作二次确认） ---------- */
+  .modal-mask{position:fixed;inset:0;background:rgba(24,24,40,.42);z-index:60;
+              display:grid;place-items:center;padding:var(--sp-4)}
+  .modal{width:100%;max-width:420px;background:#fff;border:1px solid var(--line);
+         border-radius:var(--r-xl);box-shadow:var(--shadow-2);padding:var(--sp-5);
+         animation:pop .14s ease-out}
+  @keyframes pop{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+  .modal h4{margin:0 0 6px;font-size:var(--fs-lg);font-weight:650}
+  .modal p{margin:0;color:var(--sub);font-size:var(--fs-sm);line-height:1.65;
+           white-space:pre-wrap}
+  .modal .detail{margin-top:var(--sp-3);padding:10px var(--sp-3);border-radius:var(--r-sm);
+                 background:#FCFCFE;border:1px solid var(--line-soft);
+                 font-size:var(--fs-sm);color:#4B5563;max-height:200px;overflow:auto;
+                 white-space:pre-wrap;line-height:1.55}
+  .modal .foot{display:flex;justify-content:flex-end;gap:var(--sp-2);margin-top:var(--sp-5)}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:70;
+         background:rgba(24,24,40,.92);color:#fff;font-size:13px;padding:10px var(--sp-4);
+         border-radius:999px;box-shadow:var(--shadow-2);animation:pop .16s ease-out;
+         max-width:calc(100vw - 32px);text-align:center}
+  .toast.bad{background:var(--warn)}
 
   @media (max-width:860px){
     .shell{flex-direction:column}
     .side{width:auto;flex:none;height:auto;position:static;flex-direction:row;
-          align-items:center;gap:12px;padding:10px 12px;overflow-x:auto}
+          align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-3);
+          overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);
+          -webkit-overflow-scrolling:touch}
     .brand{padding:0;flex:none}
+    .brand span{display:none}
     nav{flex-direction:row;gap:4px}
+    nav a{padding:8px 10px}
     nav a span{display:none}
-    .side-foot{margin:0;padding:0;border:0;flex-direction:row;align-items:center}
-    .side-foot .who{display:none}
-    .main{padding:16px 14px 40px}
+    nav a.on{box-shadow:inset 0 -3px 0 var(--accent)}
+    .side-foot{margin:0 0 0 auto;padding:0;border:0;flex-direction:row;align-items:center}
+    .side-foot .who,.side-foot .beian{display:none}
+    .main{padding:var(--sp-3) var(--sp-3) 40px}
+    .topbar{margin-bottom:var(--sp-3)}
+    .topbar h1{font-size:var(--fs-lg)}
+    .cards{grid-template-columns:repeat(auto-fit,minmax(126px,1fr));gap:var(--sp-2)}
+    .card{padding:var(--sp-3)}
+    .card .n{font-size:22px}
     .cols{grid-template-columns:1fr}
-    .form-grid{grid-template-columns:1fr}
+    .form-grid,.msg-item .form-grid{grid-template-columns:1fr}
+    .panel{padding:var(--sp-3)}
+    .table-wrap{max-height:none}
+    .ctl,.ctl-sm{width:100%}
+    .panel .hd{gap:var(--sp-2)}
+    .panel .hd .ctl,.panel .hd .ctl-sm,.panel .hd .field{flex:1 1 100%}
+    .feedback-content{max-width:none;min-width:180px}
+    .modal{max-width:100%;padding:var(--sp-4)}
+    .modal .foot .btn{flex:1}
+  }
+  @media screen and (min-width:861px) and (max-width:1120px){
+    .main{padding:var(--sp-4) var(--sp-4) 48px}
+    .cards{grid-template-columns:repeat(auto-fit,minmax(132px,1fr))}
   }
 </style></head>
 <body>
@@ -168,10 +305,9 @@ ADMIN_HTML = r"""<!doctype html>
         <path d="M13 17h5m0 0-2-2m2 2-2 2"/></svg>
     </div>
     <h2>掌上锡院 · 控制台</h2>
-    <p class="err" style="color:var(--sub);margin-bottom:14px;font-size:12.5px">
-      输入服务器 data/.env 中的 ADMIN_KEY</p>
+    <p class="hint">输入服务器 data/.env 中的 ADMIN_KEY</p>
     <input id="key" class="field" type="password" placeholder="ADMIN_KEY" autocomplete="current-password">
-    <button class="btn primary" onclick="login()">进入控制台</button>
+    <button class="btn primary block" id="loginBtn" onclick="login()">进入控制台</button>
     <p class="err" id="loginErr"></p>
   </div>
 </div>
@@ -222,7 +358,7 @@ ADMIN_HTML = r"""<!doctype html>
 
     <div class="side-foot">
       <div class="who" id="stamp">—</div>
-      <button class="btn ghost" onclick="logout()" style="text-align:left">退出登录</button>
+      <button class="btn ghost" onclick="logout()">退出登录</button>
       <div class="beian"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">苏ICP备2026052960号-1</a></div>
     </div>
   </aside>
@@ -234,7 +370,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="sub" id="pageSub">设备、用户与内容下发情况</div>
       </div>
       <div class="actions">
-        <button class="btn" onclick="reload()">刷新</button>
+        <button class="btn" id="refreshBtn" onclick="reload()">刷新</button>
       </div>
     </div>
 
@@ -245,7 +381,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="hd"><h3>近 30 天</h3></div>
         <div class="chart" id="chart"></div>
         <div class="legend">
-          <span><i class="dot" style="background:#6C4FD9"></i>活跃设备</span>
+          <span><i class="dot" style="background:#6C4FD9"></i>活跃用户</span>
           <span><i class="dot" style="background:#185FA5;opacity:.5"></i>新增设备</span>
         </div>
       </div>
@@ -260,12 +396,12 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="panel">
         <div class="hd">
           <h3>设备列表</h3>
-          <input id="q" class="field" style="width:240px;padding:8px 12px"
+          <input id="q" class="field ctl"
                  placeholder="搜索序列号 / 安装标识" oninput="loadDevices()">
           <button class="btn" onclick="checkDuplicates()">检查重复设备</button>
         </div>
-        <div style="overflow:auto;max-height:60vh"><table id="devTable"></table></div>
-        <p class="who" style="padding:6px 2px 0">
+        <div class="table-wrap"><table id="devTable"></table></div>
+        <p class="panel-note">
           归档只是标记 + 撤销令牌，不删记录（上传归属还挂着它）；若那台设备装回来会自动复活。
         </p>
       </div>
@@ -275,8 +411,8 @@ ADMIN_HTML = r"""<!doctype html>
     <section id="tab-users" class="hide">
       <div class="panel">
         <div class="hd"><h3>用户列表</h3></div>
-        <div style="overflow:auto;max-height:60vh"><table id="userTable"></table></div>
-        <p class="who" style="padding:6px 2px 0">只保存学号哈希与固定伪名，不存学号明文、不存姓名。</p>
+        <div class="table-wrap"><table id="userTable"></table></div>
+        <p class="panel-note">只保存学号哈希与固定伪名，不存学号明文、不存姓名。</p>
       </div>
     </section>
 
@@ -300,26 +436,26 @@ ADMIN_HTML = r"""<!doctype html>
 
     <!-- 资源审核 -->
     <section id="tab-resources" class="hide">
-      <div class="panel" style="margin-bottom:14px">
+      <div class="panel">
         <div class="hd">
           <h3>下载流量</h3>
-          <span id="resTrafficTotals" class="muted" style="font-size:12px"></span>
+          <span id="resTrafficTotals" class="muted"></span>
         </div>
-        <div style="overflow:auto;max-height:34vh"><table id="resTrafficTable"></table></div>
-        <p class="muted" style="padding:6px 2px 0">预览不占每日下载额度；下载按设备每天最多 10 次。流量含预览与下载。</p>
+        <div class="table-wrap short"><table id="resTrafficTable"></table></div>
+        <p class="panel-note">预览不占每日下载额度；下载按设备每天最多 10 次。流量含预览与下载。</p>
       </div>
       <div class="panel">
         <div class="hd">
           <h3>资源审核</h3>
-          <select id="resFilter" class="input" style="width:160px;padding:7px 10px" onchange="loadResources()">
+          <select id="resFilter" class="input ctl-sm" onchange="loadResources()">
             <option value="pending">待审核</option>
             <option value="approved">已通过</option>
             <option value="rejected">已拒绝</option>
             <option value="">全部</option>
           </select>
         </div>
-        <div style="overflow:auto;max-height:60vh"><table id="resTable"></table></div>
-        <p class="muted" style="padding:6px 2px 0">通过后立即出现在客户端资源中心；拒绝仅保留审核记录，客户端不可见。</p>
+        <div class="table-wrap"><table id="resTable"></table></div>
+        <p class="panel-note">通过后立即出现在客户端资源中心；拒绝仅保留审核记录，客户端不可见。</p>
       </div>
     </section>
 
@@ -327,13 +463,13 @@ ADMIN_HTML = r"""<!doctype html>
     <section id="tab-feedback" class="hide">
       <div class="panel">
         <div class="hd"><h3>用户反馈</h3>
-          <select id="fbFilter" class="input" style="width:160px;padding:7px 10px" onchange="loadFeedback()">
+          <select id="fbFilter" class="input ctl-sm" onchange="loadFeedback()">
             <option value="">全部</option><option value="new">未读</option>
             <option value="read">已读</option><option value="done">已处理</option>
           </select>
         </div>
-        <div style="overflow:auto;max-height:60vh"><table id="fbTable"></table></div>
-        <p class="muted" style="padding:6px 2px 0">反馈可匿名提交；带设备令牌时显示设备序列号，不采集学号明文。</p>
+        <div class="table-wrap"><table id="fbTable"></table></div>
+        <p class="panel-note">反馈可匿名提交；带设备令牌时显示设备序列号，不采集学号明文。</p>
       </div>
     </section>
 
@@ -342,7 +478,7 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="panel">
         <div class="hd"><h3>风控事件</h3>
           <button class="btn" onclick="clearRisk()">全部标记已处理</button></div>
-        <div style="overflow:auto;max-height:60vh"><table id="riskTable"></table></div>
+        <div class="table-wrap"><table id="riskTable"></table></div>
       </div>
     </section>
 
@@ -350,7 +486,7 @@ ADMIN_HTML = r"""<!doctype html>
     <section id="tab-audit" class="hide">
       <div class="panel">
         <div class="hd"><h3>审计日志</h3></div>
-        <div style="overflow:auto;max-height:60vh"><table id="auditTable"></table></div>
+        <div class="table-wrap"><table id="auditTable"></table></div>
       </div>
     </section>
   </main>
@@ -386,6 +522,94 @@ const fmt = (n) => (n ?? 0).toLocaleString('zh-CN');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// ------------------------------------------------------------ 通用 UI 助手
+
+/** 表格空态整行：带 colspan，避免列错位；可带一行说明 */
+function emptyRow(cols, text, hint){
+  return `<tr><td colspan="${cols}"><div class="empty">${esc(text)}`
+    + (hint ? `<small>${esc(hint)}</small>` : '') + '</div></td></tr>';
+}
+function loadingRow(cols){
+  return `<tr><td colspan="${cols}"><div class="loading">`
+    + '<span class="spinner"></span><span>正在加载…</span></div></td></tr>';
+}
+
+// 每个表格一个自增序号：快速切换筛选时丢弃过期响应，避免旧数据覆盖新数据
+const LOAD_SEQ = {};
+const RETRY = {};
+const stale = (key, token) => LOAD_SEQ[key] !== token;
+
+/**
+ * 表格加载包装：先出 loading 行；失败渲染带「重试」的错误行，不再静默不更新。
+ * opts.silent = true 时保留旧内容只做替换（用于边打字边搜索，避免整表闪一下）。
+ */
+async function withLoading(key, tableId, cols, fn, opts){
+  const token = (LOAD_SEQ[key] = (LOAD_SEQ[key] || 0) + 1);
+  RETRY[key] = () => withLoading(key, tableId, cols, fn, opts);
+  const table = $(tableId);
+  if (!table) return;
+  const silent = !!(opts && opts.silent);
+  if (!silent || !table.querySelector('tbody')) table.innerHTML = loadingRow(cols);
+  else table.style.opacity = '.55';
+  try{
+    await fn(token);
+  }catch(e){
+    if (stale(key, token)) return;
+    table.innerHTML = `<tr><td colspan="${cols}"><div class="load-error">`
+      + `<span>加载失败：${esc(e.message || e)}</span>`
+      + `<button class="btn xs" onclick="retryLoad('${key}')">重试</button></div></td></tr>`;
+  }finally{
+    table.style.opacity = '';
+  }
+}
+function retryLoad(key){ const fn = RETRY[key]; if (fn) fn(); }
+
+/** 统一二次确认弹窗（替代原生 confirm）：返回 Promise<boolean> */
+function confirmDialog(opts){
+  opts = opts || {};
+  const title = opts.title || '确认操作';
+  const okText = opts.okText || '确定';
+  const cancelText = opts.cancelText || '取消';
+  return new Promise(resolve => {
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    mask.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <h4>${esc(title)}</h4>
+      ${opts.message ? `<p>${esc(opts.message)}</p>` : ''}
+      ${opts.detail ? `<div class="detail">${esc(opts.detail)}</div>` : ''}
+      <div class="foot">
+        <button class="btn" data-act="cancel">${esc(cancelText)}</button>
+        <button class="btn ${opts.danger ? 'danger-solid' : 'primary'}" data-act="ok">${esc(okText)}</button>
+      </div></div>`;
+    const onKey = (e) => { if(e.key === 'Escape') done(false); };
+    const done = (val) => {
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(val);
+    };
+    mask.addEventListener('click', e => {
+      if (e.target === mask) return done(false);
+      const b = e.target.closest('[data-act]');
+      if (b) done(b.dataset.act === 'ok');
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(mask);
+    const ok = mask.querySelector('[data-act="ok"]');
+    if (ok) ok.focus();
+  });
+}
+
+let toastTimer = null;
+function toast(text, bad){
+  document.querySelectorAll('.toast').forEach(t => t.remove());
+  const el = document.createElement('div');
+  el.className = 'toast' + (bad ? ' bad' : '');
+  el.textContent = text;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.remove(); }, 2600);
+}
+
 function login(){
   KEY = $('key').value.trim();
   if(!KEY) return;
@@ -398,7 +622,17 @@ function logout(){
 }
 $('key').addEventListener('keydown', e => { if(e.key === 'Enter') login(); });
 
+// 登录按钮的忙碌态：避免重复提交、也避免点完没反应
+function setLoginBusy(busy){
+  const btn = $('loginBtn');
+  if(!btn) return;
+  btn.disabled = busy;
+  btn.textContent = busy ? '验证中…' : '进入控制台';
+}
+
 async function boot(){
+  setLoginBusy(true);
+  $('loginErr').textContent = '';
   try{
     const ov = await api('/admin/metrics/overview');
     $('loginView').classList.add('hide');
@@ -412,6 +646,8 @@ async function boot(){
   }catch(e){
     $('loginErr').textContent = '密钥不对，或服务未启动';
     $('app').classList.add('hide'); $('loginView').classList.remove('hide');
+  }finally{
+    setLoginBusy(false);
   }
 }
 
@@ -419,9 +655,9 @@ function renderCards(o){
   const items = [
     ['用户总数', fmt(o.users.total), '停用 ' + o.users.banned, false],
     ['设备总数', fmt(o.devices.total), '今日新增 ' + o.devices.newToday, true],
-    ['DAU', fmt(o.active.dau), '今日活跃设备', true],
-    ['WAU', fmt(o.active.wau), '近 7 天', false],
-    ['MAU', fmt(o.active.mau), '近 30 天', false],
+    ['DAU', fmt(o.active.dau), '今日活跃用户', true],
+    ['WAU', fmt(o.active.wau), '近 7 天活跃用户', false],
+    ['MAU', fmt(o.active.mau), '近 30 天活跃用户', false],
     ['今日事件', fmt(o.events.today), '累计 ' + o.events.total, false],
     ['待处理风控', fmt(o.risk.open), '风险事件', false],
   ];
@@ -444,7 +680,7 @@ function renderChart(items){
   $('chart').innerHTML = items.map(i => {
     const a = Math.max(2, Math.round(i.activeDevices / max * 100));
     const b = Math.max(1, Math.round(i.newDevices / max * 100));
-    return `<div class="col" title="${i.day} · 活跃 ${i.activeDevices} / 新增 ${i.newDevices}">
+    return `<div class="col" title="${i.day} · 活跃用户 ${i.activeDevices} / 新增设备 ${i.newDevices}">
       <div class="bar" style="height:${a}%"></div>
       <div class="bar alt" style="height:${b}%"></div></div>`;
   }).join('');
@@ -452,30 +688,53 @@ function renderChart(items){
 
 async function loadDevices(){
   const q = ($('q')?.value || '').trim();
-  const d = await api('/admin/devices?query=' + encodeURIComponent(q));
-  if(!d.items.length){ $('devTable').innerHTML = '<tr><td class="empty">暂无设备</td></tr>'; return; }
-  $('devTable').innerHTML =
-    '<thead><tr><th>序列号</th><th>平台</th><th>版本</th><th>状态</th><th>会话</th>'
-    + '<th>最后活跃</th><th></th></tr></thead><tbody>'
-    + d.items.map(x => `<tr>
-      <td class="mono">${esc(x.device_serial)}</td><td>${esc(x.platform||'-')}</td>
-      <td>${esc(x.app_version||'-')}</td>
-      <td>${x.status==='active'?'<span class="pill ok">正常</span>'
-        :x.status==='removed'?'<span class="pill">已归档</span>'
-        :'<span class="pill bad">已封禁</span>'}</td>
-      <td>${x.sessions}</td><td class="mono">${esc(x.last_seen)}</td>
-      <td>${x.status==='removed'
-        ? '<span class="who">已归档</span>'
-        : `<button class="btn" style="padding:4px 10px;font-size:12px"
-        onclick="toggleDevice(${x.id},'${x.status==='active'?'banned':'active'}')">
-        ${x.status==='active'?'封禁':'恢复'}</button>`}</td></tr>`).join('')
-    + '</tbody>';
+  // 边打字边搜索：静默模式保留旧内容只降低透明度，避免整表反复闪 loading
+  await withLoading('devices', 'devTable', 7, async (token) => {
+    const d = await api('/admin/devices?query=' + encodeURIComponent(q));
+    if (stale('devices', token)) return;
+    if(!d.items.length){
+      $('devTable').innerHTML = emptyRow(7, q ? '没有匹配的设备' : '暂无设备',
+        q ? '换个序列号或安装标识再试' : '客户端注册后会出现在这里');
+      return;
+    }
+    $('devTable').innerHTML =
+      '<thead><tr><th>序列号</th><th>平台</th><th>版本</th><th>状态</th><th>会话</th>'
+      + '<th>最后活跃</th><th></th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td class="mono">${esc(x.device_serial)}</td><td>${esc(x.platform||'-')}</td>
+        <td>${esc(x.app_version||'-')}</td>
+        <td>${x.status==='active'?'<span class="pill ok">正常</span>'
+          :x.status==='removed'?'<span class="pill">已归档</span>'
+          :'<span class="pill bad">已封禁</span>'}</td>
+        <td>${x.sessions}</td><td class="mono">${esc(x.last_seen)}</td>
+        <td><span class="table-actions">${x.status==='removed'
+          ? '<span class="muted">已归档</span>'
+          : `<button class="btn sm${x.status==='active'?' danger':''}"
+          onclick="toggleDevice(${x.id},'${x.status==='active'?'banned':'active'}')">
+          ${x.status==='active'?'封禁':'恢复'}</button>`}</span></td></tr>`).join('')
+      + '</tbody>';
+  }, {silent: true});
 }
 
 async function toggleDevice(id, status){
-  await api(`/admin/devices/${id}/status`, {method:'PATCH',
-    headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
-  loadDevices();
+  if (status === 'banned'){
+    const ok = await confirmDialog({
+      title: '封禁这台设备？',
+      message: '封禁后该设备的令牌与会话立即失效，客户端无法再访问接口。',
+      detail: '原状态：正常 · 操作可在设备列表里随时恢复。',
+      okText: '封禁',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  try{
+    await api(`/admin/devices/${id}/status`, {method:'PATCH',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
+    toast(status === 'banned' ? '已封禁' : '已恢复');
+    loadDevices();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
 }
 
 /**
@@ -487,9 +746,15 @@ async function toggleDevice(id, status){
  * 每组保留最近活跃的一台，其余归档（撤销令牌与会话，不删记录）。
  */
 async function checkDuplicates(){
-  const d = await api('/admin/devices/duplicates');
+  let d;
+  try{
+    d = await api('/admin/devices/duplicates');
+  }catch(e){
+    toast('检查失败：' + e.message, true);
+    return;
+  }
   if(!d.count){
-    alert('没有发现重复设备。');
+    toast('没有发现重复设备');
     return;
   }
   const lines = d.groups.map(g => {
@@ -497,53 +762,80 @@ async function checkDuplicates(){
     const extra = g.extra.map(x => `${x.serial}（${x.lastSeen}）`).join('、');
     return `用户 ${(g.alias||'').slice(0,10)}…\n  保留：${keep}\n  归档：${extra}`;
   });
-  const msg = `发现 ${d.count} 台重复设备：\n\n${lines.join('\n\n')}\n\n确认归档？`
-    + '\n（只撤销令牌与会话，不删记录；归档设备装回来会自动复活）';
-  if(!confirm(msg)) return;
+  const ok = await confirmDialog({
+    title: `发现 ${d.count} 台重复设备`,
+    message: '只撤销令牌与会话，不删记录；归档设备装回来会自动复活。',
+    detail: lines.join('\n\n'),
+    okText: '归档重复设备',
+    danger: true,
+  });
+  if(!ok) return;
   let total = 0;
-  for(const g of d.groups){
-    const r = await api('/admin/devices/archive', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({deviceIds: g.extra.map(x => x.id), keepId: g.keep.id})});
-    total += (r.archived || []).length;
+  try{
+    for(const g of d.groups){
+      const r = await api('/admin/devices/archive', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({deviceIds: g.extra.map(x => x.id), keepId: g.keep.id})});
+      total += (r.archived || []).length;
+    }
+    toast('已归档 ' + total + ' 台重复设备');
+    loadDevices();
+  }catch(e){
+    toast('归档失败：' + e.message, true);
   }
-  alert('已归档 ' + total + ' 台重复设备。');
-  loadDevices();
 }
 
 async function loadUsers(){
-  const d = await api('/admin/users');
-  if(!d.items.length){ $('userTable').innerHTML = '<tr><td class="empty">暂无用户</td></tr>'; return; }
-  $('userTable').innerHTML =
-    '<thead><tr><th>伪名</th><th>显示名</th><th>设备</th><th>状态</th><th>最后登录</th></tr></thead><tbody>'
-    + d.items.map(x => `<tr>
-      <td class="mono">${esc(x.student_alias.slice(0,14))}…</td>
-      <td>${esc(x.display_name||'-')}</td><td>${x.devices}</td>
-      <td>${x.status==='active'?'<span class="pill ok">正常</span>':'<span class="pill bad">停用</span>'}</td>
-      <td class="mono">${esc(x.last_login_at||'-')}</td></tr>`).join('') + '</tbody>';
+  await withLoading('users', 'userTable', 5, async (token) => {
+    const d = await api('/admin/users');
+    if (stale('users', token)) return;
+    if(!d.items.length){
+      $('userTable').innerHTML = emptyRow(5, '暂无用户', '用户在客户端登录后才会建档');
+      return;
+    }
+    $('userTable').innerHTML =
+      '<thead><tr><th>伪名</th><th>显示名</th><th>设备</th><th>状态</th><th>最后登录</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td class="mono">${esc((x.student_alias || '').slice(0,14))}…</td>
+        <td>${esc(x.display_name||'-')}</td><td>${x.devices}</td>
+        <td>${x.status==='active'?'<span class="pill ok">正常</span>':'<span class="pill bad">停用</span>'}</td>
+        <td class="mono">${esc(x.last_login_at||'-')}</td></tr>`).join('') + '</tbody>';
+  });
 }
 
 async function loadRisk(){
-  const d = await api('/admin/risk-events');
-  if(!d.items.length){ $('riskTable').innerHTML = '<tr><td class="empty">暂无风控事件</td></tr>'; return; }
-  $('riskTable').innerHTML =
-    '<thead><tr><th>类型</th><th>设备</th><th>用户</th><th>详情</th><th>时间</th><th>状态</th></tr></thead><tbody>'
-    + d.items.map(x => `<tr>
-      <td>${esc(x.kind)}</td><td class="mono">${esc(x.device_serial||'-')}</td>
-      <td class="mono">${esc((x.student_alias||'-').slice(0,10))}</td>
-      <td>${esc(x.detail)}</td><td class="mono">${esc(x.created_at)}</td>
-      <td>${x.cleared_at?'<span class="pill">已处理</span>':'<span class="pill bad">待处理</span>'}</td>
-      </tr>`).join('') + '</tbody>';
+  await withLoading('risk', 'riskTable', 6, async (token) => {
+    const d = await api('/admin/risk-events');
+    if (stale('risk', token)) return;
+    if(!d.items.length){
+      $('riskTable').innerHTML = emptyRow(6, '暂无风控事件', '没有异常登录或超额设备绑定');
+      return;
+    }
+    $('riskTable').innerHTML =
+      '<thead><tr><th>类型</th><th>设备</th><th>用户</th><th>详情</th><th>时间</th><th>状态</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td>${esc(x.kind)}</td><td class="mono">${esc(x.device_serial||'-')}</td>
+        <td class="mono">${esc((x.student_alias||'-').slice(0,10))}</td>
+        <td>${esc(x.detail)}</td><td class="mono">${esc(x.created_at)}</td>
+        <td>${x.cleared_at?'<span class="pill">已处理</span>':'<span class="pill bad">待处理</span>'}</td>
+        </tr>`).join('') + '</tbody>';
+  });
 }
 
 async function loadAudit(){
-  const d = await api('/admin/audit');
-  if(!d.items.length){ $('auditTable').innerHTML = '<tr><td class="empty">暂无记录</td></tr>'; return; }
-  $('auditTable').innerHTML =
-    '<thead><tr><th>动作</th><th>操作者</th><th>详情</th><th>时间</th></tr></thead><tbody>'
-    + d.items.map(x => `<tr><td>${esc(x.action)}</td><td>${esc(x.actor)}</td>
-      <td class="mono">${esc(x.detail)}</td><td class="mono">${esc(x.created_at)}</td></tr>`).join('')
-    + '</tbody>';
+  await withLoading('audit', 'auditTable', 4, async (token) => {
+    const d = await api('/admin/audit');
+    if (stale('audit', token)) return;
+    if(!d.items.length){
+      $('auditTable').innerHTML = emptyRow(4, '暂无记录', '管理端的写操作会自动记录在这里');
+      return;
+    }
+    $('auditTable').innerHTML =
+      '<thead><tr><th>动作</th><th>操作者</th><th>详情</th><th>时间</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr><td>${esc(x.action)}</td><td>${esc(x.actor)}</td>
+        <td class="mono">${esc(x.detail)}</td><td class="mono">${esc(x.created_at)}</td></tr>`).join('')
+      + '</tbody>';
+  });
 }
 
 // ---------------------------------------------------------------- 内容管理
@@ -590,12 +882,12 @@ async function loadContentHistory(name){
     const d = await api('/admin/content/' + name + '/history');
     if (!d.items.length){ $('contentHistory').innerHTML = ''; return; }
     $('contentHistory').innerHTML = `
-      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
-        <div class="field-label" style="margin-bottom:4px">历史备份 · 最近 ${d.items.length} 份</div>
+      <div class="history-wrap">
+        <div class="field-label">历史备份 · 最近 ${d.items.length} 份</div>
         ${d.items.map(x => `<div class="history-row">
           <span class="mono">${esc(x.file)}</span>
           <span class="muted">${esc(x.savedAt)}</span>
-          <button class="btn" style="padding:3px 9px;font-size:12px"
+          <button class="btn sm"
             onclick="restoreContent('${name}','${esc(x.file)}')">恢复</button>
         </div>`).join('')}
       </div>`;
@@ -605,13 +897,21 @@ async function loadContentHistory(name){
 }
 
 async function restoreContent(name, file){
-  if (!confirm('恢复会覆盖当前内容，确定继续？')) return;
+  const ok = await confirmDialog({
+    title: '恢复历史版本？',
+    message: '恢复会覆盖当前内容，保存后立即对客户端生效。',
+    detail: file,
+    okText: '恢复',
+    danger: true,
+  });
+  if (!ok) return;
   try{
     await api('/admin/content/' + name + '/restore', {method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({file})});
+    toast('已恢复到该版本');
     await openContent(name);
   }catch(e){
-    alert('恢复失败：' + e.message);
+    toast('恢复失败：' + e.message, true);
   }
 }
 
@@ -640,8 +940,7 @@ async function saveRelease(){
 function renderMessages(items){
   MESSAGES = items.map(x => ({...x}));
   $('contentEditor').innerHTML = `
-    <div class="editor-actions" style="margin:0 0 12px 0">
-      <span class="muted">共 ${MESSAGES.length} 条，前端按文件顺序展示</span>
+    <div class="editor-actions top"><span class="muted">共 ${MESSAGES.length} 条，前端按文件顺序展示</span>
       <button class="btn" onclick="addMessage()">新增公告</button>
     </div>
     <div id="messageList">${MESSAGES.map(messageCard).join('') || '<div class="empty">暂无公告</div>'}</div>
@@ -652,7 +951,7 @@ function renderMessages(items){
 function messageCard(m, i){
   return `<div class="msg-item" data-index="${i}">
     <div class="msg-head"><b>公告 ${i + 1}</b>
-      <button class="btn danger" style="padding:4px 10px;font-size:12px" onclick="removeMessage(${i})">删除</button></div>
+      <button class="btn danger sm" onclick="removeMessage(${i})">删除</button></div>
     <div class="form-grid">
       <div><label class="field-label">ID</label>
         <input class="input" data-f="id" value="${esc(m.id || '')}" placeholder="唯一标识"></div>
@@ -772,107 +1071,142 @@ function resStatus(x){
 async function loadResources(){
   loadResourceTraffic();
   const status = ($('resFilter')?.value || '').trim();
-  const d = await api('/admin/resources' + (status ? '?status=' + status : ''));
-  if(!d.items.length){
-    $('resTable').innerHTML = '<tr><td class="empty">暂无资源上传</td></tr>';
-    return;
-  }
-  $('resTable').innerHTML =
-    '<thead><tr><th>课程 / 教材</th><th>区域</th><th>备注</th><th>文件</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
-    + d.items.map(x => `<tr>
-      <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div>`
-      + (x.contributor ? `<div class="who">贡献者：${esc(x.contributor)}</div>` : '') + `</td>
-      <td>${esc(RES_AREA[x.area] || x.area)}</td>
-      <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
-      <td><div class="feedback-content">${x.files.map(f =>
-        `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · `
-        + (f.name.toLowerCase().endsWith('.pdf')
-            ? `<button class="btn" style="padding:2px 8px;font-size:11px" onclick="previewAdminFile(${f.id})">预览</button> `
-            : '')
-        + `<button class="btn" style="padding:2px 8px;font-size:11px" onclick="downloadAdminFile(${f.id})">下载</button>`
-      ).join('<br>')}</div></td>
-      <td>${resStatus(x)}</td>
-      <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
-      <td><span class="table-actions">
-        ${x.status !== 'approved' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
-        ${x.status !== 'rejected' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
-      </span></td></tr>`).join('') + '</tbody>';
+  await withLoading('resources', 'resTable', 7, async (token) => {
+    const d = await api('/admin/resources' + (status ? '?status=' + status : ''));
+    if (stale('resources', token)) return;
+    if(!d.items.length){
+      $('resTable').innerHTML = emptyRow(7,
+        status === 'pending' ? '没有待审核的资源' : '暂无资源上传',
+        status === 'pending' ? '切换筛选看全部记录' : '用户在客户端上传后会出现在这里');
+      return;
+    }
+    $('resTable').innerHTML =
+      '<thead><tr><th>课程 / 教材</th><th>区域</th><th>备注</th><th>文件</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td><b>${esc(x.courseName)}</b><div class="who">${esc(x.bookName || '未填教材')}</div>`
+        + (x.contributor ? `<div class="who">贡献者：${esc(x.contributor)}</div>` : '') + `</td>
+        <td>${esc(RES_AREA[x.area] || x.area)}</td>
+        <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
+        <td><div class="feedback-content">${x.files.map(f =>
+          `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · `
+          + (f.name.toLowerCase().endsWith('.pdf')
+              ? `<button class="btn xs" onclick="previewAdminFile(${f.id})">预览</button> `
+              : '')
+          + `<button class="btn xs" onclick="downloadAdminFile(${f.id})">下载</button>`
+        ).join('<br>')}</div></td>
+        <td>${resStatus(x)}</td>
+        <td class="mono">${esc(x.createdAt)}${x.reviewedAt ? '<br>' + esc(x.reviewedAt) : ''}</td>
+        <td><span class="table-actions">
+          ${x.status !== 'approved' ? `<button class="btn sm" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
+          ${x.status !== 'rejected' ? `<button class="btn sm danger" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
+        </span></td></tr>`).join('') + '</tbody>';
+  });
 }
 
 async function loadResourceTraffic(){
-  const d = await api('/admin/resources/traffic');
-  if(!d) return;
-  const t = d.totals || {};
-  if($('resTrafficTotals')){
-    $('resTrafficTotals').textContent =
-      `总请求 ${t.requests || 0} · 下载 ${t.downloads || 0} · 预览 ${t.previews || 0} · ${fmtBytes(t.bytes || 0)}`;
-  }
-  if(!d.devices || !d.devices.length){
-    $('resTrafficTable').innerHTML = '<tr><td class="empty">暂无下载流量</td></tr>';
-    return;
-  }
-  $('resTrafficTable').innerHTML =
-    '<thead><tr><th>设备</th><th>状态</th><th>下载</th><th>预览</th><th>流量</th><th>最近</th></tr></thead><tbody>'
-    + d.devices.map(x => `<tr>
-      <td class="mono">${esc(x.device_serial || ('#' + x.device_id))}</td>
-      <td>${x.status === 'banned' ? '<span class="pill bad">封禁</span>' : '<span class="pill ok">正常</span>'}</td>
-      <td>${x.downloads || 0}</td>
-      <td>${x.previews || 0}</td>
-      <td>${fmtBytes(x.bytes || 0)}</td>
-      <td class="mono">${esc(x.last_at || '-')}</td>
-    </tr>`).join('') + '</tbody>';
+  await withLoading('traffic', 'resTrafficTable', 6, async (token) => {
+    const d = await api('/admin/resources/traffic');
+    if (stale('traffic', token)) return;
+    if(!d) return;
+    const t = d.totals || {};
+    if($('resTrafficTotals')){
+      $('resTrafficTotals').textContent =
+        `总请求 ${t.requests || 0} · 下载 ${t.downloads || 0} · 预览 ${t.previews || 0} · ${fmtBytes(t.bytes || 0)}`;
+    }
+    if(!d.devices || !d.devices.length){
+      $('resTrafficTable').innerHTML = emptyRow(6, '暂无下载流量', '资源被预览或下载后开始统计');
+      return;
+    }
+    $('resTrafficTable').innerHTML =
+      '<thead><tr><th>设备</th><th>状态</th><th>下载</th><th>预览</th><th>流量</th><th>最近</th></tr></thead><tbody>'
+      + d.devices.map(x => `<tr>
+        <td class="mono">${esc(x.device_serial || ('#' + x.device_id))}</td>
+        <td>${x.status === 'banned' ? '<span class="pill bad">封禁</span>' : '<span class="pill ok">正常</span>'}</td>
+        <td>${x.downloads || 0}</td>
+        <td>${x.previews || 0}</td>
+        <td>${fmtBytes(x.bytes || 0)}</td>
+        <td class="mono">${esc(x.last_at || '-')}</td>
+      </tr>`).join('') + '</tbody>';
+  });
 }
 
 async function previewAdminFile(fileId){
   const win = window.open('', '_blank');
-  const res = await fetch(`/admin/resources/files/${fileId}/preview`, {headers: auth()});
-  if(!res.ok){ if(win) win.close(); alert('该文件不支持预览'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  if(win) win.location = url; else window.open(url, '_blank');
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  try{
+    const res = await fetch(`/admin/resources/files/${fileId}/preview`, {headers: auth()});
+    if(!res.ok){ if(win) win.close(); toast('该文件不支持预览', true); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if(win) win.location = url; else window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }catch(e){
+    if(win) win.close();
+    toast('预览失败：' + e.message, true);
+  }
 }
 
 async function downloadAdminFile(fileId){
-  const res = await fetch(`/admin/resources/files/${fileId}`, {headers: auth()});
-  if(!res.ok){ alert('下载失败'); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'resource-' + fileId;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  try{
+    const res = await fetch(`/admin/resources/files/${fileId}`, {headers: auth()});
+    if(!res.ok){ toast('下载失败', true); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'resource-' + fileId;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){
+    toast('下载失败：' + e.message, true);
+  }
 }
 
 async function reviewResource(id, status){
-  const ok = confirm(status === 'approved' ? '确认通过这条资源？' : '确认拒绝这条资源？');
+  const ok = await confirmDialog({
+    title: status === 'approved' ? '通过这条资源？' : '拒绝这条资源？',
+    message: status === 'approved'
+      ? '通过后立即出现在客户端资源中心。'
+      : '拒绝仅保留审核记录，客户端不可见。',
+    okText: status === 'approved' ? '通过' : '拒绝',
+    danger: status !== 'approved',
+  });
   if(!ok) return;
   const reviewNote = status === 'rejected' ? (prompt('拒绝原因（可选）') || '') : '';
-  await api(`/admin/resources/${id}/status`, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({status, reviewNote}),
-  });
-  loadResources();
+  try{
+    await api(`/admin/resources/${id}/status`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status, reviewNote}),
+    });
+    toast(status === 'approved' ? '已通过' : '已拒绝');
+    loadResources();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
 }
 
 async function loadFeedback(){
   const status = ($('fbFilter')?.value || '').trim();
-  const d = await api('/admin/feedback' + (status ? '?status=' + status : ''));
-  if(!d.items.length){ $('fbTable').innerHTML = '<tr><td class="empty">暂无反馈</td></tr>'; return; }
-  $('fbTable').innerHTML =
-    '<thead><tr><th>时间</th><th>内容</th><th>联系方式</th><th>版本</th><th>状态</th><th>操作</th></tr></thead><tbody>'
-    + d.items.map(x => `<tr>
-      <td class="mono">${esc(x.created_at)}</td>
-      <td><div class="feedback-content">${esc(x.content)}</div></td>
-      <td>${esc(x.contact || '-')}</td>
-      <td class="mono">${esc(x.app_version || '-')}</td>
-      <td>${fbStatus(x)}</td>
-      <td><span class="table-actions">
-        ${x.status === 'new' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'read')">标为已读</button>` : ''}
-        ${x.status !== 'done' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'done')">已处理</button>` : ''}
-        ${x.status === 'done' ? `<button class="btn" style="padding:4px 9px;font-size:12px" onclick="setFeedback(${x.id},'read')">重新打开</button>` : ''}
-      </span></td></tr>`).join('') + '</tbody>';
+  await withLoading('feedback', 'fbTable', 6, async (token) => {
+    const d = await api('/admin/feedback' + (status ? '?status=' + status : ''));
+    if (stale('feedback', token)) return;
+    if(!d.items.length){
+      $('fbTable').innerHTML = emptyRow(6, '暂无反馈', '用户提交反馈后会出现在这里');
+      return;
+    }
+    $('fbTable').innerHTML =
+      '<thead><tr><th>时间</th><th>内容</th><th>联系方式</th><th>版本</th><th>状态</th><th>操作</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td class="mono">${esc(x.created_at)}</td>
+        <td><div class="feedback-content">${esc(x.content)}</div></td>
+        <td>${esc(x.contact || '-')}</td>
+        <td class="mono">${esc(x.app_version || '-')}</td>
+        <td>${fbStatus(x)}</td>
+        <td><span class="table-actions">
+          ${x.status === 'new' ? `<button class="btn sm" onclick="setFeedback(${x.id},'read')">标为已读</button>` : ''}
+          ${x.status !== 'done' ? `<button class="btn sm" onclick="setFeedback(${x.id},'done')">已处理</button>` : ''}
+          ${x.status === 'done' ? `<button class="btn sm" onclick="setFeedback(${x.id},'read')">重新打开</button>` : ''}
+        </span></td></tr>`).join('') + '</tbody>';
+  });
 }
 
 function fbStatus(x){
@@ -882,24 +1216,47 @@ function fbStatus(x){
 }
 
 async function setFeedback(id, status){
-  await api(`/admin/feedback/${id}/status`, {method:'PATCH',
-    headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
-  loadFeedback();
+  try{
+    await api(`/admin/feedback/${id}/status`, {method:'PATCH',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
+    toast(status === 'done' ? '已标记为已处理' : '状态已更新');
+    loadFeedback();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
 }
 
 async function clearRisk(){
-  await api('/admin/risk-events', {method:'DELETE'});
-  loadRisk();
+  const ok = await confirmDialog({
+    title: '全部标记为已处理？',
+    message: '所有待处理的风控事件都会被清空，此操作不可撤销。',
+    detail: '只清空待处理状态，风控事件记录本身仍然保留在库里。',
+    okText: '全部标记已处理',
+    danger: true,
+  });
+  if (!ok) return;
+  try{
+    await api('/admin/risk-events', {method:'DELETE'});
+    toast('已全部标记为已处理');
+    loadRisk();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
 }
 
 function switchTab(name){
   CURRENT = name;
-  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === name));
+  document.querySelectorAll('nav a').forEach(a => {
+    const on = a.dataset.tab === name;
+    a.classList.toggle('on', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   ['overview','devices','users','content','resources','feedback','risk','audit'].forEach(k =>
     $('tab-' + k).classList.toggle('hide', k !== name));
   const [title, sub] = TITLES[name] || ['', ''];
   $('pageTitle').textContent = title;
   $('pageSub').textContent = sub;
+  document.title = title + ' · 掌上锡院控制台';
   reload();
 }
 
@@ -910,8 +1267,20 @@ function reload(){
     feedback: loadFeedback, risk: loadRisk, audit: loadAudit,
   };
   const fn = loaders[CURRENT];
-  if (fn) fn();
-  else boot();
+  const btn = $('refreshBtn');
+  if (!fn){ boot(); if (btn) flashBusy(btn, '刷新中…'); return; }
+  if (btn){ btn.disabled = true; btn.textContent = '刷新中…'; }
+  Promise.resolve(fn()).finally(() => {
+    if (btn){ btn.disabled = false; btn.textContent = '刷新'; }
+  });
+}
+
+// 概览走 boot()，给刷新按钮一个短暂的忙碌反馈，避免点了像没反应
+async function flashBusy(btn, text){
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = text;
+  await new Promise(r => setTimeout(r, 500));
+  btn.disabled = false; btn.textContent = old;
 }
 
 $('nav').addEventListener('click', e => {

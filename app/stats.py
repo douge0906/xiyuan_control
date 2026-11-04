@@ -1,7 +1,9 @@
 """统计查询：概览、趋势、分布、列表。
 
-DAU/WAU/MAU 基于 device_days（任何鉴权请求都会打点），
-按日历日去重，避免"同一设备一天算多次"。
+DAU/WAU/MAU 自 2026-11-04 起按「去重用户」统计（此前是 device_days 的设备数）：
+device_days 只记 device_id，设备归谁要靠 sessions 反查 —— 取该设备上最后一次
+登录的那条会话。查不到用户的设备（从没登录过的纯匿名设备）按设备本身各计 1，
+不让它们凭空消失。一个用户换了几台设备仍只算 1；归档设备依旧不进任何统计。
 """
 
 from __future__ import annotations
@@ -18,6 +20,27 @@ from . import security
 _NOT_REMOVED = "status != 'removed'"
 _LIVE_DEVICE_IDS = "SELECT id FROM devices WHERE status != 'removed'"
 
+# 设备 → 用户。同一台设备可能被多个学号登录过（换人用、重装重登），
+# 取最后登录的那条会话（last_seen 打平时用 id 兜底，和 devices() 的排序同规矩）。
+# 刻意不过滤 revoked_at：令牌被撤销（归档重复设备、refresh 轮换、封禁）不代表
+# 「这个人没在这台设备上活跃过」，一过滤就会把历史用户全漏成匿名设备。
+_DEVICE_USER = """(
+        SELECT s.device_id AS device_id,
+               (SELECT s2.user_id FROM sessions s2
+                 WHERE s2.device_id = s.device_id
+                 ORDER BY s2.last_seen DESC, s2.id DESC LIMIT 1) AS user_id
+          FROM sessions s GROUP BY s.device_id
+    )"""
+
+# 一行 device_days 折算成一个「活跃用户」：能对上用户按用户去重，对不上退回设备。
+# 'u7' 和 'd12' 是两套互不冲突的键，COUNT(DISTINCT ...) 不会把人和设备串味。
+_ACTIVE_KEY = """COUNT(DISTINCT CASE WHEN du.user_id IS NOT NULL
+                                 THEN 'u' || du.user_id
+                                 ELSE 'd' || dd.device_id END)"""
+_ACTIVE_FROM = """FROM device_days dd
+             JOIN devices d ON d.id = dd.device_id AND d.status != 'removed'
+             LEFT JOIN """ + _DEVICE_USER + """ du ON du.device_id = dd.device_id"""
+
 
 def overview(conn: sqlite3.Connection, content_dir) -> dict[str, Any]:
     today = security.today()
@@ -27,6 +50,13 @@ def overview(conn: sqlite3.Connection, content_dir) -> dict[str, Any]:
     def one(sql: str, *args) -> int:
         row = conn.execute(sql, args).fetchone()
         return int(row[0] or 0) if row else 0
+
+    def active_since(day: str, exact: bool = False) -> int:
+        return one(
+            "SELECT " + _ACTIVE_KEY + " " + _ACTIVE_FROM + " WHERE dd.day "
+            + ("= ?" if exact else ">= ?"),
+            day,
+        )
 
     return {
         "generatedAt": security.iso(),
@@ -44,21 +74,10 @@ def overview(conn: sqlite3.Connection, content_dir) -> dict[str, Any]:
             "banned": one("SELECT COUNT(*) FROM devices WHERE status='banned'"),
         },
         "active": {
-            "dau": one(
-                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day = ?"
-                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
-                today,
-            ),
-            "wau": one(
-                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?"
-                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
-                d7,
-            ),
-            "mau": one(
-                "SELECT COUNT(DISTINCT device_id) FROM device_days WHERE day >= ?"
-                " AND device_id IN (" + _LIVE_DEVICE_IDS + ")",
-                d30,
-            ),
+            # 口径见模块说明：去重用户，无主设备各自算 1 台。
+            "dau": active_since(today, exact=True),
+            "wau": active_since(d7),
+            "mau": active_since(d30),
         },
         "events": {
             "today": one("SELECT COUNT(*) FROM events WHERE ts LIKE ?", f"{today}%"),
@@ -95,9 +114,8 @@ def series(conn: sqlite3.Connection, days: int = 30) -> list[dict[str, Any]]:
     }
     active = {
         r["day"]: r["value"] for r in conn.execute(
-            f"""SELECT day, COUNT(DISTINCT device_id) AS value
-                FROM device_days WHERE day >= ?
-                  AND device_id IN ({_LIVE_DEVICE_IDS}) GROUP BY day""",
+            "SELECT dd.day AS day, " + _ACTIVE_KEY + " AS value " + _ACTIVE_FROM
+            + " WHERE dd.day >= ? GROUP BY dd.day",
             (start,),
         )
     }
