@@ -18,7 +18,7 @@ from fastapi import (APIRouter, File, Form, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import FileResponse
 
-from . import content, security
+from . import content, notify, security
 from .config import Config
 from .db import DB
 
@@ -553,6 +553,18 @@ async def submit_feedback(
             (device["id"] if device else None, text, contact, app_version, stamp),
         )
         feedback_id = cur.lastrowid
+
+    # 落到库里之后立刻推微信。后台线程，失败只记日志 —— 推送不能影响用户提交。
+    notify.push_feedback_async(
+        config(request).feedback_showdoc_token,
+        {
+            "id": feedback_id,
+            "content": text,
+            "contact": contact,
+            "app_version": app_version,
+            "created_at": stamp,
+        },
+    )
     return {"ok": True, "id": feedback_id, "time": stamp}
 
 

@@ -30,6 +30,9 @@ class Config:
         self.db_path = self.data_dir / "control.db"
         self.timezone_offset_hours = 8
 
+        # 反馈微信推送令牌（ShowDoc）。可选：没配就不推，不影响反馈落库。
+        self.feedback_showdoc_token: str = values.get("FEEDBACK_SHOWDOC_TOKEN", "")
+
         # 时限（秒）
         self.device_sign_window = 300          # 设备登记签名时间窗 ±5 分钟
         self.challenge_ttl = 300               # challenge 5 分钟一次性

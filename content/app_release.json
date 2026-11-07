@@ -1,5 +1,5 @@
 {
-  "latestVersion": "1.0.8",
-  "downloadUrl": "https://down.wxxydouge.icu/",
-  "notes": "开源版 1.0.8：校外免登录、课表全屏背景、余额与电费覆盖全楼栋。"
+  "latestVersion": "1.0.9",
+  "downloadUrl": "https://static.wxxydouge.icu/static/xiyuan-pocket-v1.0.9.apk",
+  "notes": "开源版 1.0.9（不兼容更新）：新增学生手册全文与校园地图。语音输入已移除；待办的「提前/到点」提醒改为默认开启并移到通知与提醒页。待办、提醒、课表、消息全面修复。"
 }
