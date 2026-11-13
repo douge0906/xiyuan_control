@@ -7,9 +7,10 @@ import uuid
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import admin, api, db
+from . import admin, api, db, webproxy
 from .config import Config
 from .privacy import PRIVACY_HTML
 from .security import iso as iso_now
@@ -31,8 +32,32 @@ db.init(cfg.db_path)
 app.state.config = cfg
 app.state.db = db.DB(cfg.db_path)
 
+# Web 版（Flutter Web / PWA）从浏览器直接调本服务，必须放行跨域。
+#
+# 为什么 `allow_credentials=False` 是**故意**的：
+# 本服务的鉴权走 `Authorization: Device <token>` 这类自定义头，
+# 不依赖浏览器自动携带的 cookie。关掉 credentials 之后，
+# 即使别的站点拿着用户浏览器来打我们，也带不上任何本域的会话。
+# 真要放开凭据，`allow_origins` 就不能是 `*`，那是另一个量级的风险。
+#
+# 允许的方法里必须有 OPTIONS：预检请求走的就是它。此前没配 CORS，
+# `OPTIONS /api/v1/messages` 直接被路由判成 405（实测 nginx 返回
+# `allow: GET`），Web 端因此连公告都取不到。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-Id"],
+    max_age=600,
+)
+
 app.include_router(api.router)
 app.include_router(admin.router)
+# Web 版专用：代浏览器抓校园站点（浏览器受同源策略限制，读不到无 CORS 头的响应）。
+# 独立模块、独立前缀 /api/v1/webproxy，不碰 api.py 的任何既有路由。
+app.include_router(webproxy.router)
 
 
 @app.middleware("http")

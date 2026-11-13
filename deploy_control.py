@@ -202,8 +202,17 @@ class Deployer:
         return tmp
 
     def precompile(self, files: dict[str, bytes], tmp: str) -> None:
-        """落盘前 py_compile 预检（用临时目录里的副本）"""
-        paths = " ".join(_shquote(posixpath.join(tmp, rel.replace("/", "__"))) for rel in files)
+        """落盘前 py_compile 预检（用临时目录里的副本）。
+
+        🔴 只编译 .py：`EXTRA_FILES` 里还有 `requirements.txt` 这类非 Python 文件，
+           把它们一并丢给 py_compile 会以 `SyntaxError: invalid syntax` 失败，
+           而报错指向的是 requirements.txt 第 4 行 —— 看起来像代码问题，实际是清单写错。
+           2026-11-10 首次改动 requirements.txt 时踩到（此前它从没变更过，所以一直没暴露）。
+        """
+        py_files = [r for r in files if r.endswith('.py')]
+        if not py_files:
+            return
+        paths = " ".join(_shquote(posixpath.join(tmp, rel.replace("/", "__"))) for rel in py_files)
         cmd = (
             "cd %s && PYTHONPYCACHEPREFIX=/tmp/pyc_ctrl %s/venv/bin/python -m py_compile %s "
             "&& echo PY_COMPILE_OK"
