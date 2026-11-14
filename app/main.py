@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import admin, api, db, webproxy
+from . import admin, api, campus_proxy, db, webproxy
 from .config import Config
 from .privacy import PRIVACY_HTML
 from .security import iso as iso_now
@@ -58,6 +58,8 @@ app.include_router(admin.router)
 # Web 版专用：代浏览器抓校园站点（浏览器受同源策略限制，读不到无 CORS 头的响应）。
 # 独立模块、独立前缀 /api/v1/webproxy，不碰 api.py 的任何既有路由。
 app.include_router(webproxy.router)
+# Web 端有状态 CAS 会话代理：服务端按学号持有 cookie 罐，独立于无状态 webproxy。
+app.include_router(campus_proxy.router)
 
 
 @app.middleware("http")
