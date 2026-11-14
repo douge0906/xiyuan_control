@@ -88,6 +88,8 @@ class _Session:
     service: str
     stage: str  # "pending" | "ready"
     cookies: dict[str, str] = field(default_factory=dict)
+    # 融合门户（一卡通余额）独立 cookie 罐：与教务 cookie 不通用。
+    portal_cookies: dict[str, str] = field(default_factory=dict)
     created: float = field(default_factory=time.monotonic)
     last: float = field(default_factory=time.monotonic)
     # 仅 pending 阶段持有：已加密密码、验证码 uid。
@@ -201,12 +203,18 @@ async def _submit_ticket(
 
 
 async def _sso_to(
-    client: httpx.AsyncClient, s: _Session, tgt: str
+    client: httpx.AsyncClient,
+    tgt: str,
+    service: str,
+    jar: dict[str, str],
 ) -> tuple[bool, str]:
-    """用 TGT 换 ST 并访问 service 建立子系统会话；返回 (成功, 诊断)。"""
+    """用 TGT 换 ST 并访问 service 建立子系统会话；返回 (成功, 诊断)。
+
+    ``jar`` 是该子系统独立的 cookie 罐（教务 / 门户互不通用）。
+    """
     st_resp = await client.post(
         f"{CAS_BASE}/lyuapServer/v1/tickets/{tgt}",
-        data={"service": s.service},
+        data={"service": service},
         headers={"Referer": f"{CAS_BASE}/"},
     )
     st = st_resp.text.strip()
@@ -219,17 +227,17 @@ async def _sso_to(
     if not st:
         return False, f"st_empty(换票HTTP {st_resp.status_code})"
 
-    sep = "&" if "?" in s.service else "?"
-    url = f"{s.service}{sep}ticket={st}"
+    sep = "&" if "?" in service else "?"
+    url = f"{service}{sep}ticket={st}"
     hops: list[str] = []
     # 逐跳跟随落地跳转（最多 6 跳），每跳捕获 cookie 并在下一跳回传，
     # 否则 ticketlogin 拿不到上一跳的 JSESSIONID/route，会被弹回登录页。
     for _ in range(6):
         headers: dict[str, str] = {"Referer": f"{CAS_BASE}/"}
-        if s.cookies:
-            headers["Cookie"] = _cookie_header(s.cookies)
+        if jar:
+            headers["Cookie"] = _cookie_header(jar)
         resp = await client.get(url, headers=headers)
-        _capture_cookies(resp.headers, s.cookies)
+        _capture_cookies(resp.headers, jar)
         location = resp.headers.get("location")
         hops.append(f"{resp.status_code}->{location or '-'}")
         if resp.status_code >= 300 and resp.status_code < 400 and location:
@@ -363,13 +371,22 @@ async def session_submit(request: Request) -> Any:
     tgt = data.get("tgt")
     if isinstance(tgt, str) and tgt:
         try:
-            ready, sso_detail = await _sso_to(client, sess, tgt)
+            ready, sso_detail = await _sso_to(
+                client, tgt, sess.service, sess.cookies
+            )
         except Exception as e:  # noqa: BLE001
             import traceback
             traceback.print_exc()
             ready, sso_detail = False, f"{type(e).__name__}: {e}"
         if not ready:
             return webproxy._fail(502, "sso_failed", f"换取教务会话失败：{sso_detail}")
+        # 融合门户（一卡通余额）独立子系统：best-effort 再建一套门户 cookie 罐；
+        # 失败不阻断教务登录 —— 余额功能降级，不影响课表 / 成绩 / 考试 / 学业。
+        try:
+            await _sso_to(client, tgt, PORTAL_SERVICE, sess.portal_cookies)
+        except Exception:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
         sess.stage = "ready"
         sess.last = _now()
         # 登录成功后不再保留加密密码。
@@ -418,14 +435,6 @@ async def session_fetch(request: Request) -> Any:
     if not sid or not url:
         return webproxy._fail(400, "missing_field", "缺少 session_id 或 url")
 
-    async with _lock:
-        _purge_expired()
-        sess = _sessions.get(sid)
-        if sess is None or sess.stage != "ready":
-            return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
-        sess.last = _now()
-        jar = dict(sess.cookies)
-
     host = webproxy._host_of(url)
     if host is None:
         return webproxy._fail(400, "bad_url", "只支持 http/https 地址")
@@ -433,6 +442,17 @@ async def session_fetch(request: Request) -> Any:
         return webproxy._fail(403, "host_not_allowed", f"不允许代理该站点：{host}")
     if await webproxy._resolves_to_private(host):
         return webproxy._fail(403, "private_address", f"该域名解析到内网地址，已拒绝：{host}")
+
+    # 门户（my.cwxu.edu.cn）走独立 cookie 罐，其余走教务罐。
+    is_portal = host == "my.cwxu.edu.cn" or host.endswith(".my.cwxu.edu.cn")
+
+    async with _lock:
+        _purge_expired()
+        sess = _sessions.get(sid)
+        if sess is None or sess.stage != "ready":
+            return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
+        sess.last = _now()
+        jar = dict(sess.portal_cookies if is_portal else sess.cookies)
 
     method = str(payload.get("method") or "GET").upper()
     if method not in ("GET", "POST", "HEAD", "PUT", "DELETE", "PATCH"):
@@ -502,11 +522,11 @@ async def session_fetch(request: Request) -> Any:
             if values:
                 out_headers[name] = list(values)
 
-        # 落地后把本轮捕获到的新 cookie 写回服务端会话（会话续期 / 刷新）。
+        # 落地后把本轮捕获到的新 cookie 写回服务端对应子系统罐（会话续期 / 刷新）。
         async with _lock:
             target = _sessions.get(sid)
             if target is not None and target.stage == "ready":
-                target.cookies.update(jar)
+                (target.portal_cookies if is_portal else target.cookies).update(jar)
                 target.last = _now()
 
         return {
@@ -524,6 +544,35 @@ async def session_fetch(request: Request) -> Any:
         return webproxy._fail(502, "upstream_error", f"代理失败：{type(exc).__name__}")
     finally:
         await client.aclose()
+
+
+@router.post("/api/v1/campus/session/ping")
+async def session_ping(request: Request) -> Any:
+    """探活：校验本地留存的 session_id 是否仍是就绪会话。
+
+    请求体：``{"session_id": "..."}``。
+    就绪 → ``{"ok": true}`` 并滑动续期；不存在 / 过期 → 401 ``session_expired``。
+    供 Web 端刷新页面后先拿本地 sid 探活，未过期免验证码进入。
+    """
+    if httpx is None:
+        return webproxy._fail(503, "proxy_unavailable", "服务器缺少 httpx，网页版教务暂不可用")
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+    sid = str(payload.get("session_id") or "").strip() if isinstance(payload, dict) else ""
+    if not sid:
+        return webproxy._fail(400, "missing_field", "缺少 session_id")
+
+    async with _lock:
+        _purge_expired()
+        sess = _sessions.get(sid)
+        if sess is None or sess.stage != "ready":
+            return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
+        sess.last = _now()
+
+    return {"ok": True}
 
 
 @router.post("/api/v1/campus/session/logout")
