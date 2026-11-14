@@ -136,6 +136,10 @@ ADMIN_HTML = r"""<!doctype html>
   .bar.alt{background:#185FA5;opacity:.45}
   .legend{display:flex;gap:var(--sp-3);font-size:var(--fs-sm);color:var(--sub);margin-top:10px}
   .dot{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:5px}
+  .line-chart{width:100%;height:160px;display:block}
+  .line-chart .line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+  .line-chart .area{fill:var(--accent);opacity:.10}
+  .line-chart .pt{fill:var(--accent)}
   .row{display:grid;grid-template-columns:112px 1fr 44px;gap:10px;align-items:center;margin:7px 0}
   .row .k{font-size:var(--fs-sm);color:var(--sub);overflow:hidden;
           text-overflow:ellipsis;white-space:nowrap}
@@ -388,6 +392,13 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="legend">
           <span><i class="dot" style="background:#6C4FD9"></i>活跃用户</span>
           <span><i class="dot" style="background:#185FA5;opacity:.5"></i>新增设备</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="hd"><h3>近 30 天日活（DAU）趋势</h3></div>
+        <svg id="dauLine" class="line-chart" viewBox="0 0 300 120" preserveAspectRatio="none"></svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--accent)"></i>日活用户（去重）</span>
         </div>
       </div>
       <div class="cols">
@@ -648,6 +659,7 @@ async function boot(){
     renderBars('platforms', ov.platforms);
     const s = await api('/admin/metrics/series?days=30');
     renderChart(s.items);
+    renderDauLine(s.items);
   }catch(e){
     $('loginErr').textContent = '密钥不对，或服务未启动';
     $('app').classList.add('hide'); $('loginView').classList.remove('hide');
@@ -689,6 +701,28 @@ function renderChart(items){
       <div class="bar" style="height:${a}%"></div>
       <div class="bar alt" style="height:${b}%"></div></div>`;
   }).join('');
+}
+
+/// 近 30 天日活（DAU，去重用户）折线图：纯 SVG，不引外部图表库。
+function renderDauLine(items){
+  const svg = $('dauLine');
+  if(!svg) return;
+  if(!items || !items.length){
+    svg.innerHTML = '<text x="150" y="60" text-anchor="middle" fill="#9CA3AF" font-size="12">暂无数据</text>';
+    return;
+  }
+  const W = 300, H = 120, pad = 8;
+  const vals = items.map(i => Number(i.activeDevices) || 0);
+  const max = Math.max(1, ...vals);
+  const n = vals.length;
+  const px = i => n === 1 ? W / 2 : pad + i * (W - 2 * pad) / (n - 1);
+  const py = v => H - pad - (v / max) * (H - 2 * pad);
+  const pts = vals.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`);
+  const area = `M${pad},${H - pad} L` + pts.join(' L') + ` L${W - pad},${H - pad} Z`;
+  const dots = vals.map((v, i) =>
+    `<circle class="pt" cx="${px(i).toFixed(1)}" cy="${py(v).toFixed(1)}" r="2.5">` +
+    `<title>${items[i].day} · 日活 ${v}</title></circle>`).join('');
+  svg.innerHTML = `<path class="area" d="${area}"/><polyline class="line" points="${pts.join(' ')}"/>${dots}`;
 }
 
 async function loadDevices(){
