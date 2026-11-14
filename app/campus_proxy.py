@@ -200,8 +200,10 @@ async def _submit_ticket(
         return {}
 
 
-async def _sso_to(client: httpx.AsyncClient, s: _Session, tgt: str) -> bool:
-    """用 TGT 换 ST 并访问 service 建立子系统会话；成功返回 True。"""
+async def _sso_to(
+    client: httpx.AsyncClient, s: _Session, tgt: str
+) -> tuple[bool, str]:
+    """用 TGT 换 ST 并访问 service 建立子系统会话；返回 (成功, 诊断)。"""
     st_resp = await client.post(
         f"{CAS_BASE}/lyuapServer/v1/tickets/{tgt}",
         data={"service": s.service},
@@ -215,23 +217,33 @@ async def _sso_to(client: httpx.AsyncClient, s: _Session, tgt: str) -> bool:
     except Exception:  # noqa: BLE001
         pass
     if not st:
-        return False
+        return False, f"st_empty(换票HTTP {st_resp.status_code})"
 
     sep = "&" if "?" in s.service else "?"
     url = f"{s.service}{sep}ticket={st}"
-    # 逐跳跟随落地跳转（最多 6 跳），每跳捕获 cookie。
+    hops: list[str] = []
+    # 逐跳跟随落地跳转（最多 6 跳），每跳捕获 cookie 并在下一跳回传，
+    # 否则 ticketlogin 拿不到上一跳的 JSESSIONID/route，会被弹回登录页。
     for _ in range(6):
-        resp = await client.get(url, headers={"Referer": f"{CAS_BASE}/"})
+        headers: dict[str, str] = {"Referer": f"{CAS_BASE}/"}
+        if s.cookies:
+            headers["Cookie"] = _cookie_header(s.cookies)
+        resp = await client.get(url, headers=headers)
         _capture_cookies(resp.headers, s.cookies)
         location = resp.headers.get("location")
+        hops.append(f"{resp.status_code}->{location or '-'}")
         if resp.status_code >= 300 and resp.status_code < 400 and location:
             url = urljoin(url, location)
+            # 对齐安卓：同域 http 跳转升级 https（明文 80 端口会被弹回登录）。
+            u = urlsplit(url)
+            if u.scheme == "http" and u.hostname and u.hostname.endswith(".cwxu.edu.cn"):
+                url = u._replace(scheme="https").geturl()
             continue
         # 落地页又被弹回登录页 → 会话没建起来。
         if not resp.is_success or "login" in str(resp.url).lower():
-            return False
-        return True
-    return False
+            return False, f"landing {resp.status_code} url={resp.url} hops={hops}"
+        return True, f"ok hops={hops}"
+    return False, f"redirect_loop hops={hops}"
 
 
 # ---------------------------------------------------------------- 端点
@@ -343,17 +355,21 @@ async def session_submit(request: Request) -> Any:
         data = await _submit_ticket(client, sess, code)
     except httpx.TimeoutException:
         return webproxy._fail(504, "upstream_timeout", "连接学校系统超时，请稍后重试")
-    except Exception:  # noqa: BLE001
-        return webproxy._fail(502, "upstream_error", "提交登录失败，请稍后重试")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return webproxy._fail(502, "upstream_error", f"提交登录失败：{type(e).__name__}: {e}")
 
     tgt = data.get("tgt")
     if isinstance(tgt, str) and tgt:
         try:
-            ready = await _sso_to(client, sess, tgt)
-        except Exception:  # noqa: BLE001
-            ready = False
+            ready, sso_detail = await _sso_to(client, sess, tgt)
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            ready, sso_detail = False, f"{type(e).__name__}: {e}"
         if not ready:
-            return webproxy._fail(502, "sso_failed", "换取教务会话失败，请稍后重试")
+            return webproxy._fail(502, "sso_failed", f"换取教务会话失败：{sso_detail}")
         sess.stage = "ready"
         sess.last = _now()
         # 登录成功后不再保留加密密码。
