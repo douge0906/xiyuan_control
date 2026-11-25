@@ -117,6 +117,19 @@ def require_session(request: Request, authorization: str | None) -> dict[str, An
 
 # ---------------------------------------------------------------- 设备
 
+# 设备登记允许的平台标识。
+#
+# `web` 是网页版（浏览器里跑的 PWA），`android` / `ios` 是两个客户端；
+# `probe` / `server` / `uploader` 是库里已有的历史值（早期探针与脚本写入），
+# 保留它们是为了老设备重新登记时不会被这次收紧挡下。
+#
+# platform 参与设备签名（见 security.device_payload），
+# 所以这里只做校验、绝不改写客户端上报的值：改写会让签名校验失败。
+DEVICE_PLATFORMS = frozenset({
+    "android", "ios", "web", "probe", "server", "uploader",
+})
+
+
 @router.post("/api/v1/devices/register")
 async def register_device(
     request: Request,
@@ -139,6 +152,8 @@ async def register_device(
         fail(400, "invalid_installation_id", "安装标识无效")
     if not public_key or not signature:
         fail(400, "missing_signature", "缺少公钥或签名")
+    if platform and platform.strip().lower() not in DEVICE_PLATFORMS:
+        fail(400, "invalid_platform", "平台标识无效")
 
     asserted = security.parse_iso(created_at)
     if asserted is None:

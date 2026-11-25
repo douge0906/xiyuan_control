@@ -606,6 +606,22 @@ const fmt = (n) => (n ?? 0).toLocaleString('zh-CN');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// ------------------------------------------------------------ 平台显示名
+//
+// devices.platform 存的是客户端上报的原始标识（android / ios / web）。
+// 控制台是给人看的，直接显示英文代号不如中文直观；这里统一映射，
+// 未知值原样透出，避免把新平台误标成别的意思。
+const PLATFORM_LABELS = {
+  android: '安卓',
+  ios: 'iOS',
+  web: '网页版',
+};
+function platformLabel(p){
+  const key = String(p ?? '').trim().toLowerCase();
+  if (!key) return '-';
+  return PLATFORM_LABELS[key] || key;
+}
+
 // ------------------------------------------------------------ 通用 UI 助手
 
 /** 表格空态整行：带 colspan，避免列错位；可带一行说明 */
@@ -762,7 +778,7 @@ function renderBars(id, items){
   if(!items || !items.length){ $(id).innerHTML = '<div class="empty">暂无数据</div>'; return; }
   const top = Math.max(...items.map(i => i.value)) || 1;
   $(id).innerHTML = items.map(i =>
-    `<div class="row"><span class="k">${esc(i.name)}</span>
+    `<div class="row"><span class="k">${esc(id === 'platforms' ? platformLabel(i.name) : i.name)}</span>
       <span class="track"><i style="width:${Math.round(i.value/top*100)}%"></i></span>
       <span class="v">${i.value}</span></div>`).join('');
 }
@@ -813,7 +829,7 @@ function renderRatings(data){
   const body = rows.map(r => {
     const d = r.distribution || {};
     const dist = [1,2,3,4,5].map(k => `${k}★ ${d[k] || 0}`).join(' · ');
-    return `<tr><td>${esc(r.version)}</td><td>${esc(r.platform)}</td>
+    return `<tr><td>${esc(r.version)}</td><td>${esc(platformLabel(r.platform))}</td>
       <td><strong>${Number(r.average || 0).toFixed(2)}</strong> / 5</td>
       <td>${r.users}</td><td class="muted">${dist}</td></tr>`;
   }).join('');
@@ -835,7 +851,7 @@ async function loadDevices(){
       '<thead><tr><th>序列号</th><th>平台</th><th>版本</th><th>状态</th><th>会话</th>'
       + '<th>最后活跃</th><th></th></tr></thead><tbody>'
       + d.items.map(x => `<tr>
-        <td class="mono">${esc(x.device_serial)}</td><td>${esc(x.platform||'-')}</td>
+        <td class="mono">${esc(x.device_serial)}</td><td>${esc(platformLabel(x.platform))}</td>
         <td>${esc(x.app_version||'-')}</td>
         <td>${x.status==='active'?'<span class="pill ok">正常</span>'
           :x.status==='removed'?'<span class="pill">已归档</span>'
