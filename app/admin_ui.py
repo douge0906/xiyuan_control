@@ -126,6 +126,8 @@ ADMIN_HTML = r"""<!doctype html>
   .panel .hd{display:flex;align-items:center;justify-content:space-between;
              gap:var(--sp-2);margin-bottom:var(--sp-3);flex-wrap:wrap}
   .panel h3{font-size:13px;color:var(--ink);margin:0;font-weight:650;letter-spacing:.2px}
+  /* hd 里要放多个控件时套一层，保证窄屏换行后仍然对齐 */
+  .hd-tools{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)}
   .chart{display:flex;align-items:flex-end;gap:4px;height:140px;padding-top:4px}
   /* 30 根柱在窄屏也要塞得下：允许列收缩，柱子最小 2px */
@@ -356,6 +358,10 @@ ADMIN_HTML = r"""<!doctype html>
       <a data-tab="feedback" title="反馈">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>反馈</span></a>
+      <a data-tab="timetables" title="课表">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><rect x="4" y="5" width="16" height="15" rx="2"/>
+          <path d="M4 10h16M9 5v-2M15 5v-2M8 14h3M13 14h3M8 17h3"/></svg><span>课表</span></a>
       <a data-tab="risk" title="风控">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round"><path d="M12 3.5 21 20H3z"/><path d="M12 9v4.5"/>
@@ -404,6 +410,11 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="cols">
         <div class="panel"><div class="hd"><h3>版本分布</h3></div><div id="versions"></div></div>
         <div class="panel"><div class="hd"><h3>平台分布</h3></div><div id="platforms"></div></div>
+      </div>
+      <div class="panel">
+        <div class="hd"><h3>版本评分</h3><span id="ratingMeta" class="muted">—</span></div>
+        <div class="table-wrap short"><table id="ratingTable"></table></div>
+        <p class="panel-note">同一用户在同一版本/平台只计一次；只展示版本、平台、平均分与分布，不展示学号/姓名。</p>
       </div>
     </section>
 
@@ -454,11 +465,18 @@ ADMIN_HTML = r"""<!doctype html>
     <section id="tab-resources" class="hide">
       <div class="panel">
         <div class="hd">
+          <h3>发布队列与完整性</h3>
+          <span id="resOpsSummary" class="muted"></span>
+        </div>
+        <div id="resOps" class="panel-note">正在读取队列与完整性抽样…</div>
+      </div>
+      <div class="panel">
+        <div class="hd">
           <h3>下载流量</h3>
           <span id="resTrafficTotals" class="muted"></span>
         </div>
         <div class="table-wrap short"><table id="resTrafficTable"></table></div>
-        <p class="panel-note">预览不占每日下载额度；下载按设备每天最多 10 次。流量含预览与下载。</p>
+        <p class="panel-note">预览不占每日下载额度；登录后按账号跨设备累计，未登录按设备累计。基础额度 5 次/天，邀请 1 人加 10 次/天（按邀人账号累计）。流量含预览与下载。</p>
       </div>
       <div class="panel">
         <div class="hd">
@@ -467,11 +485,60 @@ ADMIN_HTML = r"""<!doctype html>
             <option value="pending">待审核</option>
             <option value="approved">已通过</option>
             <option value="rejected">已拒绝</option>
+            <option value="removed">已下架</option>
             <option value="">全部</option>
           </select>
         </div>
         <div class="table-wrap"><table id="resTable"></table></div>
         <p class="panel-note">通过后立即出现在客户端资源中心；拒绝仅保留审核记录，客户端不可见。</p>
+      </div>
+      <div class="panel">
+        <div class="hd">
+          <h3>资源反馈</h3>
+          <select id="resReportFilter" class="input ctl-sm" onchange="loadResourceReports()">
+            <option value="pending">待处理</option>
+            <option value="resolved">已处理</option>
+            <option value="dismissed">已忽略</option>
+            <option value="">全部</option>
+          </select>
+        </div>
+        <div class="table-wrap"><table id="resReportTable"></table></div>
+        <p class="panel-note">用户反馈文件失效、内容不符、重复或侵权；可直接下架整个上传批次。</p>
+      </div>
+    </section>
+
+    <!-- 在线课表 -->
+    <section id="tab-timetables" class="hide">
+      <div class="panel">
+        <div class="hd">
+          <h3>发布队列</h3>
+          <span id="ttOpsSummary" class="muted"></span>
+        </div>
+        <div class="table-wrap short"><table id="ttQueueTable"></table></div>
+        <p class="panel-note">审核通过不等于客户端可见：通过后由后台 worker 打开可见闸门。发布失败会留在队列里，可在这里重试。</p>
+      </div>
+      <div class="panel">
+        <div class="hd">
+          <h3>课表审核</h3>
+          <div class="hd-tools">
+            <select id="ttFilter" class="input ctl-sm" onchange="loadTimetables()">
+              <option value="pending">待审核</option>
+              <option value="approved">已通过</option>
+              <option value="rejected">已驳回</option>
+              <option value="removed">已下架</option>
+              <option value="">全部</option>
+            </select>
+            <input id="ttKeyword" class="input ctl-sm" placeholder="班级 / 专业 / 学院"
+                   oninput="ttSearchSoon()" style="width:170px">
+          </div>
+        </div>
+        <div class="table-wrap"><table id="ttTable"></table></div>
+        <p class="panel-note">客户端只能看到「已通过且已发布」的课表。驳回必须选原因，原因会回显给上传的同学。</p>
+      </div>
+      <div class="panel">
+        <div class="hd"><h3>班级维度</h3>
+          <span class="muted">跨上传者聚合，含未发布，用来查重</span></div>
+        <div class="table-wrap short"><table id="ttClassTable"></table></div>
       </div>
     </section>
 
@@ -518,6 +585,7 @@ const TITLES = {
   users: ['用户', '学号哈希与固定伪名，可停用'],
   content: ['内容', '版本、公告、校历与试卷库，保存后自动生效'],
   resources: ['资源审核', '用户上传的教材 PDF / 试卷与答案，审核后客户端可见'],
+  timetables: ['在线课表', '学生上传的班级课表，审核通过后客户端可检索'],
   feedback: ['反馈', '匿名用户反馈与处理状态'],
   risk: ['风控', '登录频次异常与多设备绑定'],
   audit: ['审计', '管理端写操作记录'],
@@ -660,6 +728,13 @@ async function boot(){
     const s = await api('/admin/metrics/series?days=30');
     renderChart(s.items);
     renderDauLine(s.items);
+    try {
+      const r = await api('/admin/metrics/ratings');
+      renderRatings(r);
+    } catch (_) {
+      // 评分接口不可用不应把整个控制台判成“密钥不对”。
+      renderRatings({overall: {}, versions: []});
+    }
   }catch(e){
     $('loginErr').textContent = '密钥不对，或服务未启动';
     $('app').classList.add('hide'); $('loginView').classList.remove('hide');
@@ -723,6 +798,26 @@ function renderDauLine(items){
     `<circle class="pt" cx="${px(i).toFixed(1)}" cy="${py(v).toFixed(1)}" r="2.5">` +
     `<title>${items[i].day} · 日活 ${v}</title></circle>`).join('');
   svg.innerHTML = `<path class="area" d="${area}"/><polyline class="line" points="${pts.join(' ')}"/>${dots}`;
+}
+
+function renderRatings(data){
+  const table = $('ratingTable');
+  if(!table) return;
+  const o = data?.overall || {};
+  $('ratingMeta').textContent = o.ratings
+    ? `平均 ${Number(o.average || 0).toFixed(2)} / 5 · ${o.ratings} 条 · ${o.users} 人`
+    : '暂无评分';
+  const rows = data?.versions || [];
+  if(!rows.length){ table.innerHTML = '<tbody><tr><td class="empty">暂无评分</td></tr></tbody>'; return; }
+  const head = '<thead><tr><th>版本</th><th>平台</th><th>平均分</th><th>人数</th><th>1~5 星分布</th></tr></thead>';
+  const body = rows.map(r => {
+    const d = r.distribution || {};
+    const dist = [1,2,3,4,5].map(k => `${k}★ ${d[k] || 0}`).join(' · ');
+    return `<tr><td>${esc(r.version)}</td><td>${esc(r.platform)}</td>
+      <td><strong>${Number(r.average || 0).toFixed(2)}</strong> / 5</td>
+      <td>${r.users}</td><td class="muted">${dist}</td></tr>`;
+  }).join('');
+  table.innerHTML = head + '<tbody>' + body + '</tbody>';
 }
 
 async function loadDevices(){
@@ -1104,11 +1199,14 @@ function fmtBytes(n){
 function resStatus(x){
   if (x.status === 'approved') return '<span class="pill ok">已通过</span>';
   if (x.status === 'rejected') return '<span class="pill">已拒绝</span>';
+  if (x.status === 'removed') return '<span class="pill bad">已下架</span>';
   return '<span class="pill bad">待审核</span>';
 }
 
 async function loadResources(){
   loadResourceTraffic();
+  loadResourceReports();
+  loadResourceOps();
   const status = ($('resFilter')?.value || '').trim();
   await withLoading('resources', 'resTable', 7, async (token) => {
     const d = await api('/admin/resources' + (status ? '?status=' + status : ''));
@@ -1128,6 +1226,7 @@ async function loadResources(){
         <td><div class="feedback-content">${esc(x.note || '-')}</div></td>
         <td><div class="feedback-content">${x.files.map(f =>
           `${esc(RES_KIND[f.kind] || f.kind)} · ${esc(f.name)} · ${fmtBytes(f.size)} · `
+          + (f.storage === 'cos' || f.storage === 'edge' ? '已上 CDN · ' : '本地 · ')
           + (f.name.toLowerCase().endsWith('.pdf')
               ? `<button class="btn xs" onclick="previewAdminFile(${f.id})">预览</button> `
               : '')
@@ -1138,6 +1237,7 @@ async function loadResources(){
         <td><span class="table-actions">
           ${x.status !== 'approved' ? `<button class="btn sm" onclick="reviewResource(${x.id},'approved')">通过</button>` : ''}
           ${x.status !== 'rejected' ? `<button class="btn sm danger" onclick="reviewResource(${x.id},'rejected')">拒绝</button>` : ''}
+          ${x.status === 'approved' ? `<button class="btn sm danger" onclick="removeResource(${x.id})">下架</button>` : ''}
         </span></td></tr>`).join('') + '</tbody>';
   });
 }
@@ -1167,6 +1267,30 @@ async function loadResourceTraffic(){
         <td class="mono">${esc(x.last_at || '-')}</td>
       </tr>`).join('') + '</tbody>';
   });
+}
+
+async function loadResourceOps(){
+  if(!$('resOps')) return;
+  try{
+    const q = await api('/admin/resources/queue');
+    const m = await api('/admin/resources/metrics?days=7');
+    const i = await api('/admin/resources/integrity?limit=30');
+    const counts = q?.counts || {};
+    const pending = (counts.pending || 0) + (counts.retry || 0) + (counts.running || 0);
+    const failed = counts.failed || 0;
+    if($('resOpsSummary')){
+      $('resOpsSummary').textContent =
+        `队列 待处理 ${pending} · 失败 ${failed} · 已完成 ${counts.done || 0}`;
+    }
+    const recent = (q?.recent || []).filter(x => x.status !== 'done').slice(0, 5);
+    const metrics = (m?.metrics || []).map(x => `${x.day} ${x.metric}=${x.count}`).join(' · ') || '暂无指标';
+    $('resOps').innerHTML =
+      `<div>近 7 天指标：${esc(metrics)}</div>`
+      + `<div>完整性抽样：检查 ${i?.checked || 0} · 本地缺失 ${i?.localMissing || 0} · Edge 缺失 ${i?.edgeMissing || 0} · COS 缺失 ${i?.cosMissing || 0} · SHA 不符 ${i?.sha256Mismatch || 0}</div>`
+      + (recent.length ? `<div>待处理任务：${recent.map(x => `#${x.id} ${esc(x.action)} ${esc(x.status)} ${esc(x.last_error || '')}`).join('；')}</div>` : '<div>队列无待处理或失败任务。</div>');
+  }catch(e){
+    $('resOps').textContent = '运维数据读取失败：' + (e?.message || e);
+  }
 }
 
 async function previewAdminFile(fileId){
@@ -1217,6 +1341,91 @@ async function reviewResource(id, status){
       body: JSON.stringify({status, reviewNote}),
     });
     toast(status === 'approved' ? '已通过' : '已拒绝');
+    loadResources();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
+}
+
+async function removeResource(id){
+  const ok = await confirmDialog({
+    title: '下架这条资源？',
+    message: '下架后客户端立即不可见，但保留上传与审核记录，可在“已下架”筛选里查看。',
+    okText: '下架',
+    danger: true,
+  });
+  if(!ok) return;
+  const reviewNote = prompt('下架原因（可选）') || '';
+  try{
+    await api(`/admin/resources/${id}/status`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: 'removed', reviewNote}),
+    });
+    toast('已下架');
+    loadResources();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
+}
+
+const RES_REASON = {
+  broken: '文件失效', mismatch: '内容不符', duplicate: '重复资源',
+  copyright: '侵权/不宜', other: '其他',
+};
+
+function reportStatus(status){
+  if (status === 'resolved') return '<span class="pill ok">已处理</span>';
+  if (status === 'dismissed') return '<span class="pill">已忽略</span>';
+  return '<span class="pill bad">待处理</span>';
+}
+
+async function loadResourceReports(){
+  const status = ($('resReportFilter')?.value || '').trim();
+  await withLoading('reports', 'resReportTable', 7, async (token) => {
+    const d = await api('/admin/resource-reports' + (status ? '?status=' + status : ''));
+    if (stale('reports', token)) return;
+    if(!d.items.length){
+      $('resReportTable').innerHTML = emptyRow(7,
+        status === 'pending' ? '没有待处理的资源反馈' : '暂无资源反馈',
+        '用户在资源卡片右侧菜单提交后会出现在这里');
+      return;
+    }
+    $('resReportTable').innerHTML =
+      '<thead><tr><th>资源</th><th>文件</th><th>类型</th><th>说明</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
+      + d.items.map(x => `<tr>
+        <td><b>${esc(x.course_name || '-')}</b><div class="who">${esc(x.book_name || '未填教材')}</div></td>
+        <td><div class="feedback-content">${esc(x.file_name || '整个批次')}</div></td>
+        <td>${esc(RES_REASON[x.reason] || x.reason)}</td>
+        <td><div class="feedback-content">${esc(x.detail || '-')}</div></td>
+        <td>${reportStatus(x.status)}</td>
+        <td class="mono">${esc(x.created_at)}</td>
+        <td><span class="table-actions">
+          ${x.status === 'pending' ? `<button class="btn sm" onclick="resolveReport(${x.id},'resolve')">已处理</button>` : ''}
+          ${x.status === 'pending' ? `<button class="btn sm" onclick="resolveReport(${x.id},'dismiss')">忽略</button>` : ''}
+          ${x.status === 'pending' ? `<button class="btn sm danger" onclick="resolveReport(${x.id},'remove')">下架</button>` : ''}
+        </span></td></tr>`).join('') + '</tbody>';
+  });
+}
+
+async function resolveReport(id, action){
+  if(action === 'remove'){
+    const ok = await confirmDialog({
+      title: '下架并处理这条反馈？',
+      message: '整个上传批次会立即从客户端资源中心下架。',
+      okText: '下架',
+      danger: true,
+    });
+    if(!ok) return;
+  }
+  const note = prompt(action === 'remove' ? '下架原因（可选）' : '处理备注（可选）') || '';
+  try{
+    await api(`/admin/resource-reports/${id}/resolve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, note}),
+    });
+    toast(action === 'remove' ? '已下架' : action === 'dismiss' ? '已忽略' : '已处理');
     loadResources();
   }catch(e){
     toast('操作失败：' + e.message, true);
@@ -1290,7 +1499,7 @@ function switchTab(name){
     a.classList.toggle('on', on);
     if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
-  ['overview','devices','users','content','resources','feedback','risk','audit'].forEach(k =>
+  ['overview','devices','users','content','resources','timetables','feedback','risk','audit'].forEach(k =>
     $('tab-' + k).classList.toggle('hide', k !== name));
   const [title, sub] = TITLES[name] || ['', ''];
   $('pageTitle').textContent = title;
@@ -1303,6 +1512,7 @@ function reload(){
   const loaders = {
     devices: loadDevices, users: loadUsers, content: loadContent,
     resources: loadResources,
+    timetables: loadTimetables,
     feedback: loadFeedback, risk: loadRisk, audit: loadAudit,
   };
   const fn = loaders[CURRENT];
@@ -1320,6 +1530,288 @@ async function flashBusy(btn, text){
   btn.disabled = true; btn.textContent = text;
   await new Promise(r => setTimeout(r, 500));
   btn.disabled = false; btn.textContent = old;
+}
+
+// ---------------------------------------------------------------- 在线课表
+const TT_STATUS = {
+  pending: '待审核', approved: '已通过',
+  rejected: '已驳回', removed: '已下架',
+};
+const TT_REASON = {
+  mismatch_with_campus: '与校方课表不一致',
+  incomplete_info: '信息不完整',
+  duplicate: '重复上传',
+  personal_info: '含个人信息',
+  wrong_class: '班级填写有误',
+  other: '其他',
+};
+const TT_SOURCE = { local_table: '本机课程表', local_file: '导出的文件' };
+const TT_DAY = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+function ttPill(x){
+  let cls = 'pill';
+  if (x.status === 'approved') cls = 'pill ok';
+  else if (x.status === 'rejected' || x.status === 'removed') cls = 'pill bad';
+  let html = `<span class="${cls}">${esc(TT_STATUS[x.status] || x.status)}</span>`;
+  if (x.status === 'approved'){
+    html += x.published
+      ? '<div class="who"><span class="pill ok">已发布</span></div>'
+      : '<div class="who"><span class="pill bad">待发布</span></div>';
+  }
+  return html;
+}
+
+function ttConsistency(c){
+  if(!c || (!c.matched && !c.total)) return '<span class="who">未比对</span>';
+  const all = c.matched === c.total;
+  return `<span class="${all ? 'pill ok' : 'pill bad'}">`
+    + (all ? '全一致' : `${c.matched}/${c.total}`) + '</span>';
+}
+
+let ttTimer = null;
+function ttSearchSoon(){
+  clearTimeout(ttTimer);
+  ttTimer = setTimeout(() => loadTimetables(), 320);
+}
+
+async function loadTimetables(){
+  loadTtQueue();
+  loadTtClasses();
+  const status = ($('ttFilter')?.value || '').trim();
+  const kw = ($('ttKeyword')?.value || '').trim();
+  await withLoading('timetables', 'ttTable', 7, async (token) => {
+    const qs = new URLSearchParams();
+    if(status) qs.set('status', status);
+    if(kw) qs.set('keyword', kw);
+    const q = qs.toString();
+    const d = await api('/admin/timetables' + (q ? '?' + q : ''));
+    if (stale('timetables', token)) return;
+    const items = (d.data && d.data.items) || [];
+    if(!items.length){
+      $('ttTable').innerHTML = emptyRow(7,
+        status === 'pending' ? '没有待审核的课表' : '暂无课表上传',
+        status === 'pending' ? '切换筛选看全部记录' : '同学在客户端上传后会出现在这里');
+      return;
+    }
+    $('ttTable').innerHTML =
+      '<thead><tr><th>班级</th><th>学院 / 专业</th><th>提交者</th>'
+      + '<th>课程 · 一致度</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>'
+      + items.map(x => `<tr>
+        <td><b>${esc(x.bj)}</b><div class="who">v${x.version} · ${esc(x.xnm)}-${esc(x.xqm)} · ${esc(TT_SOURCE[x.source] || x.source)}</div></td>
+        <td>${esc(x.jgmc)}<div class="who">${esc(x.zymc)}</div></td>
+        <td>${esc(x.uploader_name)}${x.personal_flag ? '<div class="who"><span class="pill bad">含疑似个人信息</span></div>' : ''}</td>
+        <td>${x.course_count} 门<div class="who">${ttConsistency(x.consistency)}</div></td>
+        <td>${ttPill(x)}</td>
+        <td class="mono">${esc(x.created_at)}${x.reviewed_at ? '<br>' + esc(x.reviewed_at) : ''}</td>
+        <td><span class="table-actions">
+          <button class="btn xs" onclick="ttDetail(${x.id})">详情</button>
+          ${x.status !== 'approved' ? `<button class="btn xs" onclick="ttReview(${x.id},'approved')">通过</button>` : ''}
+          ${x.status !== 'rejected' ? `<button class="btn xs danger" onclick="ttReject(${x.id})">驳回</button>` : ''}
+          ${x.status !== 'removed' && x.status !== 'pending' ? `<button class="btn xs danger" onclick="ttReview(${x.id},'removed')">下架</button>` : ''}
+        </span></td></tr>`).join('') + '</tbody>';
+  });
+}
+
+async function loadTtQueue(){
+  await withLoading('ttQueue', 'ttQueueTable', 7, async (token) => {
+    const d = await api('/admin/timetables/queue');
+    if (stale('ttQueue', token)) return;
+    const q = (d && d.data) || {};
+    if($('ttOpsSummary')){
+      $('ttOpsSummary').textContent =
+        `待处理 ${q.pending || 0} · 进行中 ${q.running || 0} · 完成 ${q.done || 0} · 失败 ${q.failed || 0}`;
+    }
+    const items = q.items || [];
+    if(!items.length){
+      $('ttQueueTable').innerHTML = emptyRow(7, '队列是空的', '审核通过或下架时才会有任务');
+      return;
+    }
+    $('ttQueueTable').innerHTML =
+      '<thead><tr><th>#</th><th>班级</th><th>动作</th><th>状态</th>'
+      + '<th>尝试</th><th>上次错误</th><th>操作</th></tr></thead><tbody>'
+      + items.map(j => `<tr>
+        <td class="mono">${j.id}</td>
+        <td>${esc(j.class || '-')}<div class="who">${esc(j.org || '')}</div></td>
+        <td>${j.action === 'publish' ? '发布' : '下架'}</td>
+        <td>${j.status === 'failed' ? '<span class="pill bad">失败</span>'
+              : j.status === 'done' ? '<span class="pill ok">完成</span>'
+              : j.status === 'running' ? '<span class="pill">进行中</span>'
+              : '<span class="pill bad">等待</span>'}</td>
+        <td class="mono">${j.attempts}</td>
+        <td><div class="feedback-content">${esc(j.lastError || '-')}</div></td>
+        <td>${j.status === 'failed'
+              ? `<button class="btn xs" onclick="ttRetryJob(${j.id})">重试</button>` : '-'}</td>
+        </tr>`).join('') + '</tbody>';
+  });
+}
+
+async function loadTtClasses(){
+  await withLoading('ttClass', 'ttClassTable', 5, async (token) => {
+    const d = await api('/admin/timetables/classes');
+    if (stale('ttClass', token)) return;
+    const items = (d.data && d.data.classes) || [];
+    if(!items.length){
+      $('ttClassTable').innerHTML = emptyRow(5, '还没有任何班级上传过课表');
+      return;
+    }
+    $('ttClassTable').innerHTML =
+      '<thead><tr><th>班级</th><th>学院 / 专业</th><th>上传</th>'
+      + '<th>已发布</th><th>版本</th></tr></thead><tbody>'
+      + items.map(c => `<tr>
+        <td><b>${esc(c.bj)}</b><div class="who">${esc(c.xnm)}-${esc(c.xqm)}</div></td>
+        <td>${esc(c.jgmc)}<div class="who">${esc(c.zymc)}</div></td>
+        <td class="mono">${c.upload_count}</td>
+        <td class="mono">${c.published_count}</td>
+        <td>${c.versions.map(v =>
+          `v${v.version} ${esc(TT_STATUS[v.status] || v.status)}${v.published ? '·已发布' : ''}`
+          + `<div class="who">${esc(v.uploader_name)} · ${esc(v.created_at)}</div>`
+        ).join('')}</td>
+        </tr>`).join('') + '</tbody>';
+  });
+}
+
+function ttModal(html, maxWidth){
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `<div class="modal" role="dialog" aria-modal="true" `
+    + `style="max-width:${maxWidth || 720}px">${html}</div>`;
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    mask.remove();
+  };
+  const onKey = (e) => { if(e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  mask.addEventListener('click', e => { if(e.target === mask) close(); });
+  document.body.appendChild(mask);
+  return { mask, close };
+}
+
+function ttCourseLine(c, mark){
+  const slot = c.start_slot === c.end_slot
+    ? `第${c.start_slot}节` : `第${c.start_slot}-${c.end_slot}节`;
+  const bits = [TT_DAY[c.weekday] || `周${c.weekday}`, slot, c.name];
+  if(c.teacher) bits.push(c.teacher);
+  if(c.classroom) bits.push('@' + c.classroom);
+  if(c.weeks) bits.push(c.weeks);
+  const color = mark === 'diff' ? '#B45309'
+    : mark === 'extra' ? '#047857'
+    : mark === 'missing' ? '#B91C1C' : 'inherit';
+  const tag = mark === 'diff' ? ' [有出入]'
+    : mark === 'extra' ? ' [多出来的]'
+    : mark === 'missing' ? ' [校方有、这份没有]' : '';
+  return `<div style="color:${color}">${esc(bits.join(' · '))}${tag}</div>`;
+}
+
+async function ttDetail(id){
+  let d;
+  try{
+    d = await api('/admin/timetables/' + id);
+  }catch(e){
+    toast('读取失败：' + e.message, true);
+    return;
+  }
+  const x = (d.data && d.data.upload) || {};
+  const courses = (d.data && d.data.courses) || [];
+  const diff = (d.data && d.data.diff) || { items: [] };
+  const marks = {};
+  (diff.items || []).forEach(i => {
+    if(i.status !== 'same' && i.uploaded) marks[i.uploaded.name || i.name] = i.status;
+  });
+  const diffBlock = (diff.items && diff.items.length)
+    ? `<p style="margin-top:12px"><b>与校方基线比对</b>：一致 ${diff.matched} / 共 ${diff.total}</p>`
+      + '<div class="detail">'
+      + (diff.items || []).map(i => ttCourseLine(
+          i.uploaded || i.baseline || {}, i.status)).join('')
+      + '</div>'
+    : '<p style="margin-top:12px" class="who">这条上传没有带校方基线，无法比对一致度。</p>';
+  const html = `
+    <h4>${esc(x.bj)} · v${esc(x.version)}</h4>
+    <p>${esc(x.jgmc)} · ${esc(x.zymc)}　${esc(x.xnm)}-${esc(x.xqm)}</p>
+    <p class="who">提交者 ${esc(x.uploader_name)} · 来源 ${esc(TT_SOURCE[x.source] || x.source)}
+      · ${x.course_count} 门 · ${esc(x.created_at)}</p>
+    ${x.note ? `<div class="detail">${esc(x.note)}</div>` : ''}
+    ${x.review_note ? `<p style="margin-top:10px" class="who">审核备注：${esc(x.review_note)}</p>` : ''}
+    ${diffBlock}
+    <p style="margin-top:12px"><b>提交的课程（${courses.length} 门）</b></p>
+    <div class="detail" style="max-height:260px">${courses.map(c => ttCourseLine(c, marks[c.name])).join('')}</div>
+    <div class="foot"><button class="btn" data-act="close">关闭</button></div>`;
+  const m = ttModal(html);
+  m.mask.querySelector('[data-act="close"]').addEventListener('click', m.close);
+}
+
+async function ttReview(id, status){
+  const approved = status === 'approved';
+  const ok = await confirmDialog({
+    title: approved ? '通过这份课表？' : '下架这份课表？',
+    message: approved
+      ? '通过后由后台任务发布到客户端，同学就能搜到了。'
+      : '下架后客户端立即不可见，但保留上传与审核记录。',
+    okText: approved ? '通过' : '下架',
+    danger: !approved,
+  });
+  if(!ok) return;
+  try{
+    const d = await api(`/admin/timetables/${id}/status`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(approved ? {status} : {status, reviewNote: ''}),
+    });
+    const queued = d.data && d.data.queued;
+    toast(approved ? (queued ? '已通过，正在发布' : '已通过') : '已下架');
+    loadTimetables();
+  }catch(e){
+    toast('操作失败：' + e.message, true);
+  }
+}
+
+function ttReject(id){
+  const opts = Object.keys(TT_REASON).map(k =>
+    `<option value="${k}">${esc(TT_REASON[k])}</option>`).join('');
+  const html = `
+    <h4>驳回这份课表</h4>
+    <p>原因会回显给上传的同学，他改完可以重新提交。</p>
+    <div style="margin-top:14px">
+      <label class="who">驳回原因</label>
+      <select id="ttReason" class="input" style="width:100%;margin-top:6px">${opts}</select>
+    </div>
+    <div style="margin-top:10px">
+      <label class="who">补充说明（选填，最多 500 字）</label>
+      <textarea id="ttNote" class="input" rows="3" maxlength="500"
+        style="width:100%;margin-top:6px;resize:vertical"
+        placeholder="例如：第 7-8 节的教室填错了"></textarea>
+    </div>
+    <div class="foot">
+      <button class="btn" data-act="cancel">取消</button>
+      <button class="btn danger-solid" data-act="ok">确认驳回</button>
+    </div>`;
+  const m = ttModal(html, 460);
+  m.mask.querySelector('[data-act="cancel"]').addEventListener('click', m.close);
+  m.mask.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+    const reason = m.mask.querySelector('#ttReason').value;
+    const note = (m.mask.querySelector('#ttNote').value || '').trim();
+    m.close();
+    try{
+      await api(`/admin/timetables/${id}/status`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: 'rejected', reason, reviewNote: note}),
+      });
+      toast('已驳回');
+      loadTimetables();
+    }catch(e){
+      toast('操作失败：' + e.message, true);
+    }
+  });
+}
+
+async function ttRetryJob(id){
+  try{
+    await api(`/admin/timetables/queue/${id}/retry`, {method: 'POST'});
+    toast('已重新排队');
+    loadTimetables();
+  }catch(e){
+    toast('重试失败：' + e.message, true);
+  }
 }
 
 $('nav').addEventListener('click', e => {

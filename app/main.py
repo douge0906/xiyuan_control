@@ -20,6 +20,7 @@ from . import (
     course_ocr,
     db,
     dorm_proxy,
+    timetables,
     webproxy,
 )
 from .config import Config
@@ -78,6 +79,9 @@ app.include_router(campus_proxy.router)
 # 独立模块、独立前缀 /api/v1/campus/dorm，每会话独立 client 与 cookie 罐。
 app.include_router(dorm_proxy.router)
 app.include_router(course_ocr.router)
+# 班级课表在线库（2026-11-25）：同学上传本班课表 → 审核 → 发布 → 别人直接导入。
+# 独立模块、独立前缀 /api/v1/timetables 与 /admin/timetables，不碰 api.py 既有路由。
+app.include_router(timetables.router)
 
 
 @app.on_event("startup")
