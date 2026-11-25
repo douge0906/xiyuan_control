@@ -137,6 +137,15 @@ def test_bridge_page_flow_contract() -> None:
     assert "st_plat" in html and "st_gw2" in html, "桥页没读票据参数"
 
 
+def test_bridge_page_turnover_action() -> None:
+    """一卡通流水：桥页要认 action=turnover，且分页参数名必须是 current。"""
+    html = dorm_proxy._render_bridge_html()
+    assert "action === 'turnover'" in html, "桥页没有分页流水的分支"
+    assert "berserker-search/search/personal/turnover" in html, "桥页没有流水接口"
+    assert "&current=" in html, "流水分页参数名必须是 current（pageNum 会恒回第 1 页）"
+    assert "synjones-auth" in html, "流水请求缺 synjones-auth 头"
+
+
 def test_bridge_page_has_no_ticket_values() -> None:
     """页面里不能预埋任何票据值（票据由客户端用 fragment 传进来）。"""
     html = dorm_proxy._render_bridge_html()
@@ -402,6 +411,7 @@ _TESTS = [
     test_bridge_page_has_no_unreplaced_placeholders,
     test_bridge_page_flow_contract,
     test_bridge_page_has_no_ticket_values,
+    test_bridge_page_turnover_action,
     test_bridge_route_over_http,
     test_bridge_ticket_response_shape,
     test_bridge_ticket_works_for_ready_session,

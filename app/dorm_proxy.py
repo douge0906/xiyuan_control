@@ -280,6 +280,21 @@ BRIDGE_HTML = """<!DOCTYPE html>
     };
   }
 
+  // 一卡通交易流水：平台侧 `berserker-search` 分页接口。
+  // 分页参数名必须是 `current`（不是 pageNum/pageNo —— 传错恒回第 1 页，
+  // 界面表现就是「加载更多」一直重复前十条）。
+  function queryTurnover(P, token, q) {
+    var url = P + '/berserker-search/search/personal/turnover'
+      + '?type=' + encodeURIComponent(q.type || '')
+      + '&current=' + encodeURIComponent(q.current || '1')
+      + '&pageSize=' + encodeURIComponent(q.pageSize || '20')
+      + '&synAccessSource=app';
+    return jfetch(url, 'GET', {
+      'synjones-auth': 'bearer ' + token,
+      'synAccessSource': 'app'
+    });
+  }
+
   function bootstrapGateway(q) {
     if (!q.st_gw2) return Promise.resolve(false);
     log('re-bootstrapping gateway ticket');
@@ -319,6 +334,26 @@ BRIDGE_HTML = """<!DOCTYPE html>
         if (action === 'recharge') {
           finish({ok: true, kind: 'recharge', url: buildElecRecharge(Q, ctx.token)});
           return null;
+        }
+        // 一卡通流水：拿 token 直接分页读，结果原样交回客户端解析。
+        if (action === 'turnover') {
+          return queryTurnover(P, ctx.token, Q).then(function (r) {
+            var j = (r && r.json) || {};
+            if (j.code !== 200) {
+              finish({ok: false, error: '流水查询失败（' + (j.code || r.status) + '）'});
+              return null;
+            }
+            var d = j.data || {};
+            finish({
+              ok: true,
+              code: j.code,
+              records: d.records || [],
+              total: d.total,
+              current: d.current,
+              pages: d.pages
+            });
+            return null;
+          });
         }
         return queryElec(P, ctx.token, Q).then(function (r3) {
           if (r3.json && r3.json.code === 200) return r3;
