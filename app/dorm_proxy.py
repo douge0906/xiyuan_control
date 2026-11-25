@@ -42,7 +42,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import webproxy
 from . import webvpn
@@ -139,6 +139,231 @@ RECHARGE_URL_TTL = 300
 #: 网关 cookie 的名字特征（深澜 WebVPN 自家发的）。其余 cookie 归平台。
 _GATEWAY_COOKIE_HINTS = ("wengine_vpn", "route", "ssoready")
 
+# ---------------------------------------------------------------- 浏览器桥接
+
+#: 控制端自己的域名（桥页由它提供，再经网关代理加载 ⇒ 浏览器 origin 变成网关，
+#: 与校内网平台同源，于是浏览器能直接同源 fetch 包装后的内网地址）。
+CONTROL_HOST = "con.wxxydouge.icu"
+
+#: 桥页在内网平台上的主机（hex 形式由 `webvpn.encrypt_host` 算）。
+PLATFORM_HOST = "10.3.100.110"
+
+#: 桥页 URL 路径（经网关代理后是 `/https/<hex(控制域名)>/api/v1/campus/dorm/bridge`）。
+BRIDGE_PATH = "/api/v1/campus/dorm/bridge"
+
+#: 桥页 HTML（内联 JS，无外部依赖）。参数一律从 `location.hash` 读，
+#: 这样票据不会出现在 URL 的 query 里，也就不会进 nginx 访问日志。
+BRIDGE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<title>掌上锡院 · 校园网桥</title>
+</head>
+<body>
+<pre id="log">bridge loading…</pre>
+<script>
+// 掌上锡院 · WebVPN 桥页（生产版原型）
+//
+// 本页由 con.wxxydouge.icu 提供，但**通过 WebVPN 网关加载**：
+//   https://webvpn.cwxu.edu.cn/https/<hex(con.wxxydouge.icu)>/api/v1/campus/dorm/bridge#...
+// 所以本页的 origin 是 https://webvpn.cwxu.edu.cn —— 与校内网平台同源，
+// 可以直接同源 fetch 包装后的内网地址，绕开「服务器出口 IP 被网关 403 拒绝」。
+//
+// 前提：网关票据 cookie 已在**前一步**种好（客户端先开一次网关登录页）。
+// 若平台接口回的不是 JSON 而是 HTML（= 被弹回登录页），说明票据没了，
+// 这时用 st_gw2（备用的一次性票）自举一次再重试。
+(function () {
+  var el = document.getElementById('log');
+  function log(m) { if (el) el.textContent += '\\n' + m; }
+  function finish(payload) {
+    window.__bridgeResult = payload;
+    try { if (window.opener) window.opener.postMessage(
+      {source: 'xiyuan-bridge', type: 'dorm-result', payload: payload}, '*'); } catch (e) {}
+    // 充值类结果**不能关窗**：客户端要复用这个窗口导航到充值页，
+    // 关掉再开就是「没有用户手势的新窗口」→ 会被弹窗拦截器拦下。
+    var keep = !!(payload && payload.ok && payload.kind);
+    if (!keep) { try { window.close(); } catch (e) {} }
+  }
+
+  var GW = '__GATEWAY__';
+  var PLATFORM_BASIC = '__PLATFORM_BASIC__';
+  var CHARGE_BASIC = '__CHARGE_BASIC__';
+
+  function jfetch(url, method, headers, body) {
+    var h = {};
+    if (headers) { for (var k in headers) { if (Object.prototype.hasOwnProperty.call(headers, k)) h[k] = headers[k]; } }
+    if (body && !h['Content-Type']) h['Content-Type'] = 'application/x-www-form-urlencoded';
+    return fetch(url, {method: method || 'GET', headers: h, body: body || undefined, credentials: 'include'})
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var j = null; try { j = JSON.parse(t); } catch (e) {}
+          return {status: r.status, url: r.url, json: j, text: j ? '' : t.slice(0, 300)};
+        });
+      });
+  }
+
+  function parseHash() {
+    var out = {};
+    var raw = (location.hash || '').replace(/^#/, '');
+    if (!raw) return out;
+    raw.split('&').forEach(function (kv) {
+      if (!kv) return;
+      var i = kv.indexOf('=');
+      var k = i < 0 ? kv : kv.slice(0, i);
+      var v = i < 0 ? '' : kv.slice(i + 1);
+      try { out[decodeURIComponent(k)] = decodeURIComponent(v); } catch (e) { out[k] = v; }
+    });
+    return out;
+  }
+
+  function getPlatformTicket(P, q) {
+    var casTarget = encodeURIComponent('__PLAT_TARGET__');
+    return jfetch(P + '/berserker-auth/cas/login/lyCas?targetUrl=' + casTarget
+                  + '&ticket=' + encodeURIComponent(q.st_plat), 'GET')
+      .then(function (r1) {
+        var plat = '';
+        try {
+          var all = new URL(r1.url).searchParams.getAll('ticket');
+          for (var i = 0; i < all.length; i++) {
+            if (all[i].indexOf('ST-') !== 0) { plat = all[i]; break; }
+          }
+        } catch (e) {}
+        log('platform ticket len ' + plat.length);
+        if (!plat) throw new Error('平台票据获取失败');
+        return plat;
+      });
+  }
+
+  function getToken(P, plat) {
+    var grant = 'grant_type=password&scope=all&loginFrom=app&logintype=sso&device_token=h5';
+    var form = grant + '&username=' + encodeURIComponent(plat) + '&password=' + encodeURIComponent(plat);
+    return jfetch(P + '/berserker-auth/oauth/token', 'POST', {'Authorization': PLATFORM_BASIC}, form)
+      .then(function (r2) {
+        var token = (r2.json && r2.json.access_token) || '';
+        log('access_token len ' + token.length);
+        if (!token) throw new Error('校园网认证失败');
+        return token;
+      });
+  }
+
+  function queryElec(P, token, q) {
+    var body = 'feeitemid=' + encodeURIComponent(q.feeitemid || '448')
+      + '&type=IEC&level=3'
+      + '&campus=' + encodeURIComponent(q.campus || '1')
+      + '&building=' + encodeURIComponent(q.building || '')
+      + '&room=' + encodeURIComponent(q.room || '');
+    return jfetch(P + '/charge/feeitem/getThirdData', 'POST', {
+      'Authorization': CHARGE_BASIC,
+      'synjones-auth': 'bearer ' + token,
+      'synAccessSource': 'app'
+    }, body);
+  }
+
+  // 充值页地址只能在这里拼：它要带平台 access_token，而平台只有浏览器进得去
+  // （服务端出口 IP 被网关 403）。路径前缀直接用网关的 `/http/<hex>` 形式，
+  // 所以本页不需要自己算 AES。
+  function buildElecRecharge(q, token) {
+    return GW + '/http/' + q.hex + '__CHARGE_APP_PATH__'
+      + '?name=pays&id=' + encodeURIComponent(q.feeitemid || '448')
+      + '&paymentUrl=' + encodeURIComponent('__PAYMENT_TARGET__')
+      + '&token=' + encodeURIComponent(token);
+  }
+
+  function buildCardRecharge(q, plat) {
+    var base = GW + '/http/' + q.hex;
+    var target = encodeURIComponent('__CARD_RECHARGE_PATH__');
+    return {
+      warmup_url: base + '__CARD_LOGIN_PATH__'
+        + '&ticket=' + encodeURIComponent(plat) + '&targetUrl=' + target,
+      url: base + '__CARD_RECHARGE_PATH__'
+    };
+  }
+
+  function bootstrapGateway(q) {
+    if (!q.st_gw2) return Promise.resolve(false);
+    log('re-bootstrapping gateway ticket');
+    return jfetch(GW + '/login?cas_login=true&ticket=' + encodeURIComponent(q.st_gw2), 'GET')
+      .then(function () { return true; });
+  }
+
+  var Q = {};
+
+  function acquire(P) {
+    return getPlatformTicket(P, Q).then(function (plat) {
+      return getToken(P, plat).then(function (token) {
+        return {plat: plat, token: token};
+      });
+    });
+  }
+
+  function run() {
+    Q = parseHash();
+    var P = GW + '/http/' + Q.hex;
+    var action = Q.action || 'query';
+
+    // 一卡通充值：只需要一张**还没被消费**的平台票据去预热登录态。
+    // 千万不能走 acquire()：oauth 换 token 会把这票据用掉（一次性），
+    // 再用它加热登录页只会落到平台登录页。
+    if (action === 'card') {
+      return getPlatformTicket(P, Q)
+        .then(function (plat) {
+          var card = buildCardRecharge(Q, plat);
+          finish({ok: true, kind: 'card', url: card.url, warmup_url: card.warmup_url});
+        })
+        .catch(function (e) { finish({ok: false, error: String((e && e.message) || e)}); });
+    }
+
+    return acquire(P)
+      .then(function (ctx) {
+        if (action === 'recharge') {
+          finish({ok: true, kind: 'recharge', url: buildElecRecharge(Q, ctx.token)});
+          return null;
+        }
+        return queryElec(P, ctx.token, Q).then(function (r3) {
+          if (r3.json && r3.json.code === 200) return r3;
+          // 没票据 → 自举一次再试
+          log('retry after bootstrap');
+          return bootstrapGateway(Q).then(function () {
+            return acquire(P);
+          }).then(function (ctx2) {
+            return queryElec(P, ctx2.token, Q);
+          });
+        }).then(function (r3) {
+          var j = r3.json || {};
+          if (j.code !== 200) { finish({ok: false, error: '电费查询失败（' + j.code + '）'}); return; }
+          finish({ok: true, code: j.code, map: j.map});
+        });
+      })
+      .catch(function (e) { finish({ok: false, error: String((e && e.message) || e)}); });
+  }
+
+  window.__bridgeReady = true;
+  run();
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def _render_bridge_html() -> str:
+    """把桥页模板里的占位符换成真实常量。
+
+    为什么不直接写成字面量：网关地址与两个 Basic 头都是模块常量，改了配置
+    桥页要跟着变；写成占位符只有一处要改。
+    """
+    return (
+        BRIDGE_HTML.replace("__GATEWAY__", webvpn.GATEWAY)
+        .replace("__PLATFORM_BASIC__", PLATFORM_BASIC)
+        .replace("__CHARGE_BASIC__", CHARGE_BASIC)
+        .replace("__PLAT_TARGET__", f"{PLATFORM_BASE}/plat/?name=loginTransit")
+        .replace("__CHARGE_APP_PATH__", "/charge-app")
+        .replace("__PAYMENT_TARGET__", f"{PLATFORM_BASE}/plat")
+        .replace("__CARD_RECHARGE_PATH__", PLATFORM_CARD_RECHARGE.replace(PLATFORM_BASE, ""))
+        .replace("__CARD_LOGIN_PATH__", PLATFORM_CARD_LOGIN.replace(PLATFORM_BASE, ""))
+    )
+
 
 class DormError(Exception):
     """业务错误：带 code / message，直接转成 ``{"error": {...}}`` 信封。"""
@@ -159,7 +384,11 @@ class _DormSession:
 
     sid: str
     username: str
-    stage: str  # "pending" | "ready"
+    # "pending" = 等人工验证码；"cas" = 只完成了 CAS 登录（桥接模式：有 TGT，
+    # 能现铸 ST，但服务端自己跑不动内网）；"ready" = 网关 + 平台都通了。
+    stage: str
+    # 登录模式："server" = 服务端代跑内网（默认）；"bridge" = 浏览器自己去读内网。
+    mode: str = "server"
     # CAS 登录用的 service：安卓端用的就是平台的 lyCas service。
     service: str = ""
     created: float = field(default_factory=time.monotonic)
@@ -473,8 +702,13 @@ async def _dorm_login(
     sess: _DormSession,
     client: Any,
     code: str,
+    cas_only: bool = False,
 ) -> tuple[bool, str]:
     """用验证码提交 CAS 登录；成功则继续走 WebVPN + 平台登录。
+
+    ``cas_only=True``（桥接模式）时**只做 CAS 登录**：拿到 TGT 就收工，
+    网关换票与平台登录都不做 —— 因为服务器出口 IP 被网关 403，内网只能由
+    用户浏览器自己去读（见 `bridge-ticket` / `bridge` 两个端点）。
 
     返回 ``(成功, 诊断码)``：诊断码为空串表示成功；``bad_credential`` /
     ``locked`` 表示不该再试；``captcha_failed`` 表示换张验证码继续；
@@ -501,10 +735,14 @@ async def _dorm_login(
         return False, "captcha_failed"
 
     sess.tgt = tgt
-    sess.stage = "ready"
+    sess.stage = "cas" if cas_only else "ready"
     sess.last = _now()
     sess.encrypted_password = ""
     sess.captcha_uid = ""
+
+    if cas_only:
+        # 桥接模式：有 TGT 就能现铸 ST，剩下的让浏览器去做。
+        return True, ""
 
     # ② WebVPN 换票：网关票据是后续所有内网请求的前提。
     try:
@@ -541,10 +779,35 @@ async def _body(request: Request) -> dict[str, Any]:
 
 
 async def _require_session(sid: str) -> _DormSession:
+    """取「服务端自己已经把内网跑通」的会话（`query` / 充值类端点用）。
+
+    桥接模式（`stage == cas`）的会话只完成了 CAS 登录，服务端摸不到内网，
+    这类端点对它无解 —— 直接给一句明确的文案，别让用户以为是登录过期。
+    """
     async with _lock:
         await _purge_expired()
         sess = _sessions.get(sid)
-    if sess is None or sess.stage != "ready":
+    if sess is None or not sess.tgt:
+        raise DormError(401, "session_expired", "登录已过期，请重新登录")
+    if sess.stage != "ready":
+        raise DormError(
+            400,
+            "bridge_unsupported",
+            "网页版暂不支持该操作（内网需由浏览器直连），请在安卓 App 内使用",
+        )
+    return sess
+
+
+async def _require_cas_session(sid: str) -> _DormSession:
+    """取一个「至少完成 CAS 登录」的会话（桥接模式用）。
+
+    桥接会话的 stage 是 ``cas``（有 TGT，但没有网关/平台登录态），普通会话
+    是 ``ready``。两者都能铸 ST，所以都放行。
+    """
+    async with _lock:
+        await _purge_expired()
+        sess = _sessions.get(sid)
+    if sess is None or sess.stage not in ("ready", "cas") or not sess.tgt:
         raise DormError(401, "session_expired", "登录已过期，请重新登录")
     return sess
 
@@ -581,6 +844,10 @@ async def session_start(request: Request) -> Any:
     - 需人工验证码：``{"session_id": "...", "captcha_b64": "..."}``
     - 失败：``{"error": {"code": "bad_credential|locked|rate_limited|...",
       "message": "..."}}``
+
+    可选 ``"mode": "bridge"``：只做 CAS 登录（拿 TGT 就收工），跳过网关换票与
+    平台登录 —— 服务器出口 IP 被 WebVPN 网关 403，内网只能由用户浏览器自己去读。
+    这时成功响应多一个 ``"mode": "bridge"``，后续用 ``bridge-ticket`` 铸票。
     """
     if httpx is None:
         return _fail(503, "proxy_unavailable", "服务器缺少 httpx，电费查询暂不可用")
@@ -595,6 +862,9 @@ async def session_start(request: Request) -> Any:
     if not username or not password:
         return _fail(400, "missing_credential", "缺少学号或密码")
 
+    mode = str(payload.get("mode") or "").strip().lower()
+    bridge = mode == "bridge"
+
     # 同一账号 8 秒内只允许发起一次 CAS 登录（学校按登录失败次数计锁号）。
     if _throttle_remaining(username) > 0:
         return _fail(429, "rate_limited", "登录过于频繁，请稍后再试")
@@ -603,6 +873,7 @@ async def session_start(request: Request) -> Any:
         sid=_new_sid(),
         username=username,
         stage="pending",
+        mode="bridge" if bridge else "server",
         service=PLATFORM_CAS_SERVICE,
         encrypted_password=_rsa_encrypt(password),
     )
@@ -627,10 +898,12 @@ async def session_start(request: Request) -> Any:
         if not answer:
             continue
 
-        ok, detail = await _dorm_login(sess, client, answer)
+        ok, detail = await _dorm_login(sess, client, answer, cas_only=bridge)
         if ok:
             _mark_login(username)
             await _store_session(sess)
+            if bridge:
+                return {"session_id": sess.sid, "ok": True, "mode": "bridge"}
             return {"session_id": sess.sid, "ok": True}
 
         if detail in ("bad_credential", "locked"):
@@ -656,6 +929,8 @@ async def session_start(request: Request) -> Any:
 
     _mark_login(username)
     await _store_session(sess)
+    if bridge:
+        return {"session_id": sess.sid, "captcha_b64": captcha_b64, "mode": "bridge"}
     return {"session_id": sess.sid, "captcha_b64": captcha_b64}
 
 
@@ -682,10 +957,14 @@ async def session_submit(request: Request) -> Any:
         return _fail(401, "session_expired", "登录已过期，请重新登录")
 
     client = _session_client(sess)
-    ok, detail = await _dorm_login(sess, client, code)
+    ok, detail = await _dorm_login(
+        sess, client, code, cas_only=(sess.mode == "bridge")
+    )
     if ok:
         _mark_login(sess.username)
         await _store_session(sess)
+        if sess.mode == "bridge":
+            return {"session_id": sid, "ok": True, "mode": "bridge"}
         return {"session_id": sid, "ok": True}
 
     if detail in ("bad_credential", "locked"):
@@ -889,9 +1168,15 @@ async def session_refresh(request: Request) -> Any:
         return _fail(400, "missing_field", "缺少 session_id")
 
     try:
-        sess = await _require_session(sid)
+        sess = await _require_cas_session(sid)
     except DormError as exc:
         return _fail(exc.status, exc.code, exc.message)
+
+    if sess.stage == "cas":
+        # 桥接会话：服务端没跑网关/平台，没有「续期」这回事 —— 它只需要 TGT
+        # 能继续铸票。TGT 死了会在 bridge-ticket 上以 401 暴露出来。
+        await _touch(sid)
+        return {"ok": True, "refreshed": False}
 
     refreshed = False
     try:
@@ -950,7 +1235,12 @@ async def session_refresh(request: Request) -> Any:
 
 @router.post("/api/v1/campus/dorm/session/ping")
 async def session_ping(request: Request) -> Any:
-    """探活：校验本地留存的 session_id 是否仍是就绪会话。"""
+    """探活：校验本地留存的 session_id 是否仍然可用。
+
+    ⚠️ 桥接模式（``mode=bridge``）的会话 stage 是 ``cas``：服务端没跑网关/平台，
+    但它**能铸票**，浏览器侧照样能查电费。所以这里放行 ``cas`` 与 ``ready``
+    两种 stage —— 否则 Web 端每次查询前探活都会拿到 401，把好会话当成过期清掉。
+    """
     if httpx is None:
         return _fail(503, "proxy_unavailable", "服务器缺少 httpx，电费查询暂不可用")
 
@@ -960,7 +1250,7 @@ async def session_ping(request: Request) -> Any:
         return _fail(400, "missing_field", "缺少 session_id")
 
     try:
-        await _require_session(sid)
+        await _require_cas_session(sid)
     except DormError as exc:
         return _fail(exc.status, exc.code, exc.message)
 
@@ -985,3 +1275,104 @@ async def session_logout(request: Request) -> Any:
         sess.platform_cookies.clear()
         await _close_session_client(sess)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- 桥接模式
+#
+# 服务器出口 IP（42.192.52.117）被 WebVPN 网关 403，内网慧新平台只有用户
+# 自己的浏览器能读到。桥接模式的做法：
+#
+#   1. 客户端用 ``mode=bridge`` 登录 → 服务端只做 CAS 登录，拿到 TGT；
+#   2. 客户端调 ``bridge-ticket`` → 服务端用 TGT 铸两张一次性 ST
+#      （网关票 + 平台票），连同内网地址的密文一起交给浏览器；
+#   3. 浏览器先顶层打开网关登录页（``{GW}/login?cas_login=true&ticket=st_gw``）
+#      拿到网关票据 cookie，再导航到 ``{GW}/https/<hex(控制域名)>/…/bridge#参数``；
+#      网关会把控制服务端的页面代理出来，浏览器 origin 变成网关，
+#      于是页面里的 fetch 与内网平台同源、带得上 cookie；
+#   4. 桥页跑完链路后 ``postMessage`` 回执给 opener。
+#
+# ⚠️ 网关票据 cookie 的 Set-Cookie **没有 SameSite**（默认 Lax），第三方 iframe
+# 带不上，所以必须是顶层命名窗口，不能 iframe。
+
+
+@router.post("/api/v1/campus/dorm/bridge-ticket")
+async def bridge_ticket(request: Request) -> Any:
+    """铸桥接用的一次性票据（网关票 + 平台票）。
+
+    请求体：``{"session_id": "..."}``
+
+    响应字段：
+
+    - ``gateway_origin``：网关 origin，例如 ``https://webvpn.cwxu.edu.cn``；
+    - ``bridge_path``：**网关上的路径**（不是控制端自己的路径）。客户端要拼成
+      ``{gateway_origin}{bridge_path}`` 才能打开桥页，即
+      ``https://webvpn.cwxu.edu.cn/https/<hex(控制域名)>/api/v1/campus/dorm/bridge``；
+      开头必然是 ``/https/``（网关用「协议 + 密文主机」表示被代理的站点）；
+    - ``st_gw``：网关票，客户端先拿它开
+      ``{gateway_origin}/login?cas_login=true&ticket=st_gw`` 种网关票据 cookie；
+    - ``st_plat``：平台票，一次性，桥页用它换 access_token；
+    - ``hex_plat``：内网平台主机（``10.3.100.110``）的密文，桥页用它拼内网地址；
+    - ``expires_in``：提示用的有效期（秒），票据本身极短命。
+
+    ⚠️ 票据一律**不进日志、不进异常文案**（用 :func:`webvpn.redact` 脱敏），
+    也**不能放进 URL 的 query**（会进 nginx 访问日志）——只能走 fragment。
+
+    票据一次性、极短命，所以每次调用都现铸。
+    """
+    if httpx is None:
+        return _fail(503, "proxy_unavailable", "服务器缺少 httpx，桥接暂不可用")
+
+    payload = await _body(request)
+    sid = str(payload.get("session_id") or "").strip()
+    if not sid:
+        return _fail(400, "missing_field", "缺少 session_id")
+
+    try:
+        sess = await _require_cas_session(sid)
+    except DormError as exc:
+        return _fail(exc.status, exc.code, exc.message)
+
+    client = _session_client(sess)
+    try:
+        st_gw = await webvpn.cas_st(
+            client, sess.tgt, webvpn.WEBVPN_LOGIN_SERVICE
+        )
+        st_plat = await webvpn.cas_st(client, sess.tgt, PLATFORM_CAS_SERVICE)
+    except webvpn.CasError as exc:
+        return _fail(401, "unauthorized", webvpn.redact(str(exc)))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(502, "upstream_error", f"铸造票据失败：{type(exc).__name__}")
+
+    if not st_gw or not st_plat:
+        return _fail(502, "upstream_error", "铸造票据失败：票据为空")
+
+    await _touch(sid)
+    return {
+        "ok": True,
+        "gateway_origin": webvpn.GATEWAY,
+        # 网关上的路径：客户端拼 {gateway_origin}{bridge_path}。
+        "bridge_path": f"/https/{webvpn.encrypt_host(CONTROL_HOST)}{BRIDGE_PATH}",
+        "st_gw": st_gw,
+        "st_plat": st_plat,
+        "hex_plat": webvpn.encrypt_host(PLATFORM_HOST),
+        "expires_in": RECHARGE_URL_TTL,
+    }
+
+
+@router.get("/api/v1/campus/dorm/bridge")
+async def bridge() -> HTMLResponse:
+    """桥页：浏览器里的「代理客户端」，替服务端去读内网电费。
+
+    - 页面**不需要登录**（它由网关代理，浏览器 origin 已是网关）；
+    - 所有票据、房间号等参数都从 ``location.hash`` 读 —— URL 的 fragment
+      不会进 nginx 访问日志；
+    - 结果通过 ``window.opener.postMessage`` 回给开窗的页面，然后关窗。
+    """
+    return HTMLResponse(
+        content=_render_bridge_html(),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+        },
+    )

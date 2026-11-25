@@ -286,6 +286,12 @@ async def webvpn_login(client: Any, jar: dict[str, str], tgt: str) -> None:
     # ④ 真实验证：内网免鉴权接口必须回 JSON，而不是登录页 HTML。
     status, _url, _headers, content = await vpn_fetch(client, jar, PLATFORM_PROBE_URL)
     text = content.decode("utf-8", "replace")
+    if status == 403:
+        # 网关按**出口 IP** 拦截：实测服务器出口（42.192.52.117）被网关 403，
+        # 而同一地址在用户浏览器里是 200。这跟「没登录」是两回事 —— 早先
+        # 把 403 落进下面的 HTML 分支，报出来的是「VPN未登录」，排查方向全错。
+        # 走浏览器侧链路（桥页）才能绕过这个限制。
+        raise WebVpnError(f"VPN被网关拒绝：HTTP {status}")
     if status >= 500:
         raise WebVpnError(f"VPN验证失败：HTTP {status}")
     if text.lstrip().startswith("<"):
