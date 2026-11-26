@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import (APIRouter, Header, HTTPException, Query, Request)
 from fastapi.responses import FileResponse, HTMLResponse
 
-from . import content, content_store, security, stats
-from .api import config, db, fail
+from . import content, content_store, resource_jobs, security, stats
+from .api import (config, db, fail, _edge_enabled, storage_for,
+                  _sha256_file)
+from .object_storage import CosError
 from .config import Config
 from .db import DB
 from .admin_ui import ADMIN_HTML
@@ -76,6 +79,17 @@ def metrics_breakdown(
             "versions": stats.breakdown(conn, "app_version", limit=10),
             "platforms": stats.breakdown(conn, "platform"),
         }
+
+
+@router.get("/admin/metrics/ratings")
+def metrics_ratings(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """五星评价按版本 + 平台聚合（同一用户同一版本只算一次）。"""
+    require_admin(request, authorization)
+    with db(request) as conn:
+        return stats.app_ratings(conn)
 
 
 # ---------------------------------------------------------------- 列表
@@ -473,8 +487,9 @@ def admin_resources(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_admin(request, authorization)
-    if status and status not in ("pending", "approved", "rejected"):
-        fail(400, "invalid_status", "状态只能是 pending / approved / rejected")
+    if status and status not in ("pending", "approved", "rejected", "removed"):
+        fail(400, "invalid_status", "状态只能是 pending / approved / rejected / removed")
+    cfg: Config = config(request)
     with db(request) as conn:
         rows = conn.execute(
             """SELECT * FROM resource_uploads
@@ -486,7 +501,7 @@ def admin_resources(
         items: list[dict[str, Any]] = []
         for row in rows:
             files = conn.execute(
-                """SELECT id, name, size, kind, downloads
+                """SELECT id, name, size, kind, downloads, object_key, stored_name
                    FROM resource_files WHERE upload_id = ? ORDER BY id""",
                 (row["id"],),
             ).fetchall()
@@ -509,6 +524,12 @@ def admin_resources(
                             "size": f["size"],
                             "kind": f["kind"],
                             "downloads": f["downloads"],
+                            "storage": (
+                                "cos" if f["object_key"] else
+                                ("edge" if _edge_enabled(cfg)
+                                 and (cfg.edge_public_dir / str(row["id"]) / f["stored_name"]).exists()
+                                 else "local")
+                            ),
                         }
                         for f in files
                     ],
@@ -526,8 +547,8 @@ async def set_resource_status(
     require_admin(request, authorization)
     body = await request.json()
     status = str(body.get("status") or "")
-    if status not in ("approved", "rejected"):
-        fail(400, "invalid_status", "状态只能是 approved / rejected")
+    if status not in ("approved", "rejected", "removed"):
+        fail(400, "invalid_status", "状态只能是 approved / rejected / removed")
     review_note = str(body.get("reviewNote") or "").strip()[:500]
     stamp = security.iso()
     with db(request) as conn:
@@ -543,7 +564,208 @@ async def set_resource_status(
             (status, stamp, review_note, upload_id),
         )
         audit(conn, f"resource_{status}", f"upload_id={upload_id}")
-    return {"ok": True, "status": status}
+        job_id = resource_jobs.enqueue(
+            conn, upload_id, "publish" if status == "approved" else "delete"
+        )
+    return {"ok": True, "status": status, "jobId": job_id,
+            "queued": True}
+
+
+@router.get("/admin/resource-reports")
+def admin_resource_reports(
+    request: Request,
+    status: str = Query(default="pending"),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_admin(request, authorization)
+    if status and status not in ("pending", "resolved", "dismissed"):
+        fail(400, "invalid_status", "状态只能是 pending / resolved / dismissed")
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT r.*, u.course_name, u.book_name, u.status AS upload_status,
+                      f.name AS file_name
+               FROM resource_reports r
+               LEFT JOIN resource_uploads u ON u.id = r.upload_id
+               LEFT JOIN resource_files f ON f.id = r.file_id
+               WHERE (? = '' OR r.status = ?)
+               ORDER BY r.id DESC
+               LIMIT 500""",
+            (status, status),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@router.post("/admin/resource-reports/{report_id}/resolve")
+async def resolve_resource_report(
+    report_id: int,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """处理反馈：`resolve` 只标记已处理；`remove` 同时下架整个上传批次。"""
+    require_admin(request, authorization)
+    try:
+        body = await request.json()
+    except Exception:
+        fail(400, "invalid_json", "请求体不是合法 JSON")
+    action = str(body.get("action") or "").strip()
+    note = str(body.get("note") or "").strip()[:500]
+    if action not in ("resolve", "remove", "dismiss"):
+        fail(400, "invalid_action", "操作只能是 resolve / remove / dismiss")
+    stamp = security.iso()
+    with db(request) as conn:
+        report = conn.execute(
+            "SELECT * FROM resource_reports WHERE id = ?", (report_id,)
+        ).fetchone()
+        if report is None:
+            fail(404, "report_not_found", "反馈记录不存在")
+        if action == "remove":
+            conn.execute(
+                """UPDATE resource_uploads
+                   SET status = 'removed', reviewed_at = ?, review_note = ?
+                   WHERE id = ?""",
+                (stamp, note or "用户反馈后下架", report["upload_id"]),
+            )
+            conn.execute(
+                """UPDATE resource_reports SET status = 'resolved',
+                   handled_at = ?, handle_note = ?
+                   WHERE upload_id = ? AND status = 'pending'""",
+                (stamp, note, report["upload_id"]),
+            )
+        else:
+            target = "resolved" if action == "resolve" else "dismissed"
+            conn.execute(
+                """UPDATE resource_reports
+                   SET status = ?, handled_at = ?, handle_note = ?
+                   WHERE id = ?""",
+                (target, stamp, note, report_id),
+            )
+        audit(conn, f"resource_report_{action}",
+              f"report_id={report_id} upload_id={report['upload_id']}")
+        job_id = 0
+        if action == "remove":
+            job_id = resource_jobs.enqueue_delete(conn, report["upload_id"])
+    return {"ok": True, "action": action, "jobId": job_id}
+
+
+@router.get("/admin/resources/queue")
+def admin_resource_queue(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """资源发布 outbox 的队列/失败状态，供控制台和巡检查看。"""
+    require_admin(request, authorization)
+    with db(request) as conn:
+        counts = conn.execute(
+            """SELECT status, COUNT(*) AS n FROM resource_publish_jobs
+               GROUP BY status"""
+        ).fetchall()
+        recent = conn.execute(
+            """SELECT id, upload_id, action, status, attempts, last_error,
+                      created_at, updated_at, next_run_at
+               FROM resource_publish_jobs
+               ORDER BY id DESC LIMIT 30"""
+        ).fetchall()
+    count_map = {row["status"]: row["n"] for row in counts}
+    return {
+        "counts": count_map,
+        "recent": [dict(row) for row in recent],
+        "pending": count_map.get("pending", 0),
+        "failed": count_map.get("failed", 0),
+    }
+
+
+@router.get("/admin/resources/metrics")
+def admin_resource_metrics(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=90),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """资源中心按天指标：下载/预览/307 来源/额度拦截/发布失败等。"""
+    require_admin(request, authorization)
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT day, metric, count FROM resource_daily_metrics
+               WHERE day >= date('now', ?)
+               ORDER BY day DESC, metric""",
+            (f"-{days - 1} days",),
+        ).fetchall()
+        events = conn.execute(
+            """SELECT substr(created_at, 1, 10) AS day,
+                      COUNT(*) AS requests,
+                      COALESCE(SUM(CASE WHEN mode = 'download' THEN 1 ELSE 0 END), 0) AS downloads,
+                      COALESCE(SUM(CASE WHEN mode = 'preview' THEN 1 ELSE 0 END), 0) AS previews,
+                      COALESCE(SUM(bytes), 0) AS bytes
+               FROM download_events
+               WHERE created_at >= date('now', ?)
+               GROUP BY substr(created_at, 1, 10)
+               ORDER BY day DESC""",
+            (f"-{days - 1} days",),
+        ).fetchall()
+    return {"days": days, "metrics": [dict(r) for r in rows],
+            "events": [dict(r) for r in events]}
+
+
+@router.get("/admin/resources/integrity")
+def admin_resource_integrity(
+    request: Request,
+    limit: int = Query(default=30, ge=1, le=500),
+    remote: bool = Query(default=False),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """抽样/全量对账：本地文件、EdgeOne 镜像、COS 对象与 SHA-256。
+
+    默认只查前 30 个，避免管理页面一次扫 1.3GB；全量用 limit=500
+    或直接跑 tools/check_resources.py。
+    """
+    require_admin(request, authorization)
+    cfg: Config = config(request)
+    with db(request) as conn:
+        rows = conn.execute(
+            """SELECT f.id, f.upload_id, f.name, f.stored_name, f.size,
+                      f.sha256, f.object_key, u.status
+               FROM resource_files f
+               JOIN resource_uploads u ON u.id = f.upload_id
+               WHERE u.status = 'approved'
+               ORDER BY f.id LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    items = []
+    store = storage_for(cfg) if remote and cfg.cos_enabled else None
+    try:
+        for row in rows:
+            local = cfg.upload_dir / str(row["upload_id"]) / row["stored_name"]
+            edge = (Path(cfg.edge_public_dir) / str(row["upload_id"])
+                    / row["stored_name"]) if _edge_enabled(cfg) else None
+            item = {
+                "id": row["id"], "uploadId": row["upload_id"],
+                "name": row["name"], "size": row["size"],
+                "sha256": row["sha256"] or "",
+                "local": local.exists() and local.stat().st_size == row["size"],
+                "edge": bool(edge is not None and edge.exists()
+                             and edge.stat().st_size == row["size"]),
+                "cos": bool(row["object_key"]),
+            }
+            if local.exists() and (row["sha256"] or "").strip():
+                item["sha256Match"] = (
+                    _sha256_file(local) == row["sha256"]
+                )
+            if store is not None and row["object_key"]:
+                try:
+                    item["cos"] = store.object_exists(row["object_key"])
+                except CosError as exc:
+                    item["cosError"] = str(exc)[:200]
+            items.append(item)
+    finally:
+        if store is not None:
+            store.close()
+    return {
+        "checked": len(items),
+        "localMissing": sum(1 for i in items if not i["local"]),
+        "edgeMissing": sum(1 for i in items if not i["edge"]),
+        "cosMissing": sum(1 for i in items if not i["cos"]),
+        "sha256Mismatch": sum(1 for i in items if i.get("sha256Match") is False),
+        "items": items,
+    }
 
 
 @router.get("/admin/resources/traffic")

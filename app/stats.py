@@ -102,6 +102,61 @@ def breakdown(conn: sqlite3.Connection, column: str, limit: int = 8) -> list[dic
     return [dict(r) for r in rows]
 
 
+def app_ratings(conn: sqlite3.Connection) -> dict[str, Any]:
+    """五星评价按版本聚合（同一用户同一版本只算一次）。
+
+    用户口径是「按版本评分」，平台只作为该版本的附加信息展示；
+    不按版本+平台拆行，避免同一版本在控制台出现多条重复统计。
+    `app_ratings` 里存内部 `user_id` 仅用于去重；不返回、不展示学号/姓名。
+    """
+    overall = conn.execute(
+        """SELECT COUNT(DISTINCT user_id) AS users,
+                  COUNT(*) AS ratings,
+                  AVG(rating) AS avg
+           FROM app_ratings"""
+    ).fetchone()
+    rows = conn.execute(
+        """SELECT COALESCE(NULLIF(app_version, ''), '未知') AS version,
+                  GROUP_CONCAT(DISTINCT COALESCE(NULLIF(platform, ''), '未知')) AS platform,
+                  COUNT(DISTINCT user_id) AS users,
+                  COUNT(*) AS ratings,
+                  AVG(rating) AS avg,
+                  SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS r1,
+                  SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) AS r2,
+                  SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) AS r3,
+                  SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) AS r4,
+                  SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) AS r5
+           FROM app_ratings
+           GROUP BY version
+           ORDER BY version DESC"""
+    ).fetchall()
+
+    def item(r: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "version": r["version"],
+            "platform": r["platform"] or "",
+            "users": int(r["users"] or 0),
+            "ratings": int(r["ratings"] or 0),
+            "average": round(float(r["avg"] or 0), 2),
+            "distribution": {
+                "1": int(r["r1"] or 0),
+                "2": int(r["r2"] or 0),
+                "3": int(r["r3"] or 0),
+                "4": int(r["r4"] or 0),
+                "5": int(r["r5"] or 0),
+            },
+        }
+
+    return {
+        "overall": {
+            "users": int(overall["users"] or 0),
+            "ratings": int(overall["ratings"] or 0),
+            "average": round(float(overall["avg"] or 0), 2),
+        },
+        "versions": [item(r) for r in rows],
+    }
+
+
 def series(conn: sqlite3.Connection, days: int = 30) -> list[dict[str, Any]]:
     days = max(1, min(days, 90))
     start = (security.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
