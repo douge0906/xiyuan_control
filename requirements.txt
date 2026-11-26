@@ -4,3 +4,9 @@ cryptography>=42
 python-multipart>=0.0.9
 # Web 端抓取代理用（app/webproxy.py）。必须与 fastapi 的 httpx 版本互不冲突。
 httpx>=0.27
+# 课表截图识别（app/course_ocr.py）。缺包时应用仍可启动，但 OCR 接口会返回失败。
+rapidocr_onnxruntime>=1.4
+onnxruntime>=1.17
+opencv-python-headless>=4.9
+numpy>=1.26
+pillow>=10.0

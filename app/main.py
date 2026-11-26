@@ -11,12 +11,24 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import admin, api, accounts, campus_proxy, content, course_ocr, db, webproxy
+from . import (
+    admin,
+    api,
+    accounts,
+    campus_proxy,
+    content,
+    course_ocr,
+    db,
+    dorm_proxy,
+    resource_link,
+    timetables,
+    webproxy,
+)
 from .config import Config
 from .privacy import PRIVACY_HTML
 from .security import iso as iso_now
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.7"
 
 logger = logging.getLogger("xiyuan_control")
 
@@ -64,7 +76,14 @@ app.include_router(admin.router)
 app.include_router(webproxy.router)
 # Web 端有状态 CAS 会话代理：服务端按学号持有 cookie 罐，独立于无状态 webproxy。
 app.include_router(campus_proxy.router)
+# Web 端「电费查询 / 充值」代理：服务端代跑内网慧新 E 校链路（经 WebVPN 网关），
+# 独立模块、独立前缀 /api/v1/campus/dorm，每会话独立 client 与 cookie 罐。
+app.include_router(dorm_proxy.router)
+app.include_router(resource_link.router)
 app.include_router(course_ocr.router)
+# 班级课表在线库（2026-11-25）：同学上传本班课表 → 审核 → 发布 → 别人直接导入。
+# 独立模块、独立前缀 /api/v1/timetables 与 /admin/timetables，不碰 api.py 既有路由。
+app.include_router(timetables.router)
 
 
 @app.on_event("startup")

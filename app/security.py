@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 TZ = timezone(timedelta(hours=8))
 DEVICE_PREFIX = "xiyuan-control-device"
 LOGIN_PREFIX = "xiyuan-control-login"
+LOGIN_PREFIX_V2 = "xiyuan-control-login-v2"
 ALIAS_SALT = "xiyuan-control|student|"
 
 
@@ -71,11 +72,36 @@ def token_hash(token: str, secret: str) -> str:
 # ---------------------------------------------------------------- 伪名
 
 def student_hash(student_id: str) -> str:
+    """旧客户端兼容用：仅用于在库中兜底查找未迁移的历史账号。
+
+    2026-11-20 起新账号不再写入这个可枚举的裸哈希；存量账号启动时会
+    被改写成 ``v2:<account_key>``，旧客户端仍可凭 alias 找到账号。
+    """
     return hashlib.sha256(student_id.encode()).hexdigest()
 
 
 def student_alias(student_id: str) -> str:
     return hashlib.sha256(f"{ALIAS_SALT}{student_id}".encode()).hexdigest()
+
+
+def account_key(secret: str, alias: str) -> str:
+    """把客户端伪名变成服务端账号键：HMAC(secret, alias)。
+
+    伪名本身是固定前缀 SHA-256，学号空间小、可离线枚举；数据库只存这个
+    HMAC 结果，拿库没有 secret 就无法反推伪名或学号。
+    """
+    return hmac.new(
+        secret.encode(), f"xiyuan-account|{alias}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def alias_tag(key: str) -> str:
+    """给后台展示用的短标签，不可反推。"""
+    return key[:8]
+
+
+def is_alias(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
 # ---------------------------------------------------------------- 签名
@@ -100,6 +126,16 @@ def login_payload(challenge_id: str, challenge: str, device_serial: str,
     return canonical([
         LOGIN_PREFIX, challenge_id, challenge, device_serial,
         student_id, alias, display_name, asserted_at,
+    ])
+
+
+def login_payload_v2(challenge_id: str, challenge: str, device_serial: str,
+                     alias: str, display_name: str,
+                     asserted_at: str) -> bytes:
+    """客户端本地只算伪名，原始学号不再进入请求或签名。"""
+    return canonical([
+        LOGIN_PREFIX_V2, challenge_id, challenge, device_serial,
+        alias, display_name, asserted_at,
     ])
 
 

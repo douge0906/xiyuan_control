@@ -16,8 +16,10 @@ CAS/教务 cookie 罐，浏览器交账密、服务端代跑 CAS 登录与查询
    不再保存；TGT / cookie 只存内存，进程重启即失效。
 4. **一期独立会话，不与 App 设备私钥 token 打通**：会话凭证是本模块自签的随机
    `session_id`，不复用、不互认 App 的设备令牌。
-5. **验证码人工回填**：服务端不做本地验证码识别；`/session/start` 取图回传浏览器，
-   用户识别后由 `/session/submit` 回填。
+5. **验证码服务端自动识别**：与安卓端同一套模板匹配（`captcha_tpl.py`），
+   一次 `/session/start` 内最多自动试 3 张图，识别成功就直接登录并返回
+   `{"ok": true}`，用户看不到验证码；三轮都识别不出来才回退成人工回填
+   `captcha_b64`（行为与改造前一致）。
 
 ## 未覆盖（一期）
 
@@ -40,6 +42,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from . import webproxy
+from .captcha_solver import solve as _captcha_solve
 
 # httpx 可选依赖：缺失时应用照常启动，仅本模块端点返回 503（同 webproxy 策略）。
 try:  # noqa: SIM105
@@ -66,12 +69,20 @@ _RSA_MODULUS_HEX = (
 )
 _RSA_EXPONENT = 65537
 
-#: 会话有效期（秒）。对齐安卓本地会话缓存的 20 分钟保守口径。
-SESSION_TTL = 20 * 60
+#: 会话有效期（秒）：滑动续期。浏览器端会话凭据只存 sid，罐留在服务端，
+#: 因此可以比安卓本地缓存更宽；只要用户在窗口内用过一次就顺延。
+#: 20 分钟过短会导致频繁要求重新验证码登录（h5 之所以「不用重登」正是
+#: 因为它把罐放在浏览器本地、没有服务端过期一说）。这里取 12 小时，
+#: 真实有效性仍以 `session/refresh` 探活上游为准。
+SESSION_TTL = 12 * 60 * 60
 #: 待验证码阶段的有效期（未提交即丢弃凭据）。
 PENDING_TTL = 5 * 60
-#: 单会话并发上限：同一学号只保留最新一条会话。
-MAX_PER_USER = 1
+#: 单账号并发会话上限：同一学号可同时保留最近 N 条会话。
+#:
+#: ⚠️ 旧值是 1（只留最新一条），于是「手机上登一次、电脑上再登一次」会把
+#: 前一个会话踢掉，前一个设备随后所有请求都收到 401，用户体感就是
+#: 「登录状态不在了」。现在保留最近 N 条，多设备互不干扰；超出时才淘汰最旧的。
+MAX_PER_USER = 3
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -95,11 +106,54 @@ class _Session:
     # 仅 pending 阶段持有：已加密密码、验证码 uid。
     encrypted_password: str = ""
     captcha_uid: str = ""
+    # CAS 票据授予票据（TGT）。留着它就能在教务/门户 cookie 过期后**免验证码**
+    # 重新换取 ST 重建会话罐 —— 这是 Web 端「静默续期」的唯一凭据，
+    # 不落盘、不进日志、登出即丢。
+    tgt: str = ""
+    # 会话级复用的 keep-alive HTTP 客户端；懒创建，登出 / 过期时关闭。
+    client: Any = None
+    # 同一会话的隧道请求串行使用 client：httpx 自身并发安全，但手动 cookie
+    # 罐的读写与 302 逐跳 cookie 回写不是原子的，串行能避免两次请求互相覆盖。
+    request_lock: Any = field(default_factory=asyncio.Lock)
 
 
 _sessions: dict[str, _Session] = {}
-_by_user: dict[str, str] = {}
+#: 同一学号保留的会话 sid 列表（最新在前）。旧实现只存一条，导致多设备
+#: 登录互相踢下线；这里保留最近 [MAX_PER_USER] 条。
+_by_user: dict[str, list[str]] = {}
 _lock = asyncio.Lock()
+
+
+def _user_sids(username: str) -> list[str]:
+    return _by_user.setdefault(username, [])
+
+
+def _remember_user_session(username: str, sid: str) -> list[_Session]:
+    """登记新会话并淘汰同账号的旧会话。
+
+    返回被淘汰的会话（调用方在锁外关闭它们的 HTTP 客户端）。
+    """
+    sids = _user_sids(username)
+    if sid in sids:
+        sids.remove(sid)
+    sids.insert(0, sid)
+    evicted: list[_Session] = []
+    while len(sids) > MAX_PER_USER:
+        old_sid = sids.pop()
+        old_sess = _sessions.pop(old_sid, None)
+        if old_sess is not None:
+            evicted.append(old_sess)
+    return evicted
+
+
+def _forget_user_session(username: str, sid: str) -> None:
+    sids = _by_user.get(username)
+    if not sids:
+        return
+    if sid in sids:
+        sids.remove(sid)
+    if not sids:
+        _by_user.pop(username, None)
 
 
 def _now() -> float:
@@ -125,7 +179,7 @@ def _cookie_header(jar: dict[str, str]) -> str:
     return "; ".join(f"{k}={v}" for k, v in jar.items())
 
 
-def _purge_expired() -> None:
+async def _purge_expired() -> None:
     now = _now()
     stale = [
         sid
@@ -134,8 +188,9 @@ def _purge_expired() -> None:
     ]
     for sid in stale:
         s = _sessions.pop(sid, None)
-        if s and _by_user.get(s.username) == sid:
-            _by_user.pop(s.username, None)
+        if s:
+            await _close_session_client(s)
+            _forget_user_session(s.username, sid)
 
 
 def _rsa_encrypt(password: str) -> str:
@@ -154,6 +209,28 @@ def _new_client() -> httpx.AsyncClient:
         http2=False,
         headers={"User-Agent": _UA},
     )
+
+
+def _session_client(sess: _Session) -> httpx.AsyncClient:
+    """懒创建并复用会话级 HTTP 客户端（keep-alive 连接池）。
+
+    单 worker 单事件循环内，同一会话复用同一 AsyncClient，避免每次隧道请求
+    都重握 TCP+TLS。cookie 仍由服务端 dict 罐手动管理，不依赖客户端自带 jar。
+    """
+    if sess.client is None or getattr(sess.client, "is_closed", True):
+        sess.client = _new_client()
+    return sess.client
+
+
+async def _close_session_client(sess: _Session) -> None:
+    """关闭并丢弃会话持有的复用客户端；忽略关闭期异常。"""
+    client = sess.client
+    if client is not None:
+        sess.client = None
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------- 内部流程
@@ -257,6 +334,31 @@ async def _sso_to(
 # ---------------------------------------------------------------- 端点
 
 
+async def _finish_login(
+    sess: _Session, client: Any, tgt: str
+) -> tuple[bool, str]:
+    """拿到 TGT 后的收尾：建教务罐、best-effort 建门户罐、落会话状态。
+
+    自动识别登录与人工回填登录共用这一条路径，避免两套收尾逻辑走偏。
+    """
+    ready, detail = await _sso_to(client, tgt, sess.service, sess.cookies)
+    if not ready:
+        return False, detail
+    try:
+        await _sso_to(client, tgt, PORTAL_SERVICE, sess.portal_cookies)
+    except Exception:  # noqa: BLE001
+        import traceback
+
+        traceback.print_exc()
+    sess.stage = "ready"
+    sess.last = _now()
+    # 留下 TGT：cookie 罐日后过期时靠它免验证码重建会话（静默续期）。
+    sess.tgt = tgt
+    sess.encrypted_password = ""
+    sess.captcha_uid = ""
+    return True, "ok"
+
+
 @router.get("/api/v1/campus/ping")
 async def campus_ping() -> dict[str, Any]:
     """探活：供前端确认代理可用。"""
@@ -269,10 +371,13 @@ async def campus_ping() -> dict[str, Any]:
 
 @router.post("/api/v1/campus/session/start")
 async def session_start(request: Request) -> Any:
-    """第一步：校验入参、加密密码、取验证码图，建立 pending 会话。
+    """一步登录：服务端自动识别验证码并完成 CAS 登录，失败再回退人工。
 
     请求体：``{"username": "...", "password": "...", "service": "可选"}``
-    响应：``{"session_id": "...", "captcha_b64": "..."}``
+    响应：
+      - 自动识别成功：``{"session_id": "...", "ok": true}``（前端不需要弹验证码）
+      - 三轮都没识别出来：``{"session_id": "...", "captcha_b64": "..."}``，
+        与改造前一致，交人工回填后走 ``/session/submit``
     """
     if httpx is None:
         return webproxy._fail(503, "proxy_unavailable", "服务器缺少 httpx，网页版教务暂不可用")
@@ -307,26 +412,90 @@ async def session_start(request: Request) -> Any:
         stage="pending",
         encrypted_password=encrypted,
     )
+    client = _session_client(sess)
 
-    client = _new_client()
+    # 自动识别最多试 3 张：单张识别率 97%~100%，三张几乎必成，用户看不到验证码。
+    for _attempt in range(3):
+        try:
+            uid, captcha_b64 = await _fetch_captcha(client)
+        except httpx.TimeoutException:
+            await _close_session_client(sess)
+            return webproxy._fail(504, "upstream_timeout", "连接学校系统超时，请稍后重试")
+        except Exception:  # noqa: BLE001
+            await _close_session_client(sess)
+            return webproxy._fail(502, "upstream_error", "获取验证码失败，请稍后重试")
+        sess.captcha_uid = uid
+
+        try:
+            answer = _captcha_solve(base64.b64decode(captcha_b64))
+        except Exception:  # noqa: BLE001
+            answer = None
+        if not answer:
+            continue
+
+        try:
+            data = await _submit_ticket(client, sess, answer)
+        except Exception:  # noqa: BLE001
+            continue
+
+        tgt = data.get("tgt") if isinstance(data, dict) else None
+        if isinstance(tgt, str) and tgt:
+            try:
+                ok, _detail = await _finish_login(sess, client, tgt)
+            except Exception as e:  # noqa: BLE001
+                # 自动登录分支里 `_finish_login` 抛异常时，不能把 pending 会话
+                # 留在 `_sessions` 里、也不能继续拿这张票据重试 —— 关掉客户端
+                # 后重来一轮验证码，最后一轮仍失败再回退人工。
+                import traceback
+                traceback.print_exc()
+                ok = False
+            if ok:
+                async with _lock:
+                    await _purge_expired()
+                    _sessions[sid] = sess
+                    evicted = _remember_user_session(username, sid)
+                for old_sess in evicted:
+                    await _close_session_client(old_sess)
+                return {"session_id": sid, "ok": True}
+            continue
+
+        # 账密错 / 锁定这类不该反复重试，直接给结论。
+        block = data.get("data") if isinstance(data, dict) else None
+        code_str = block.get("code", "") if isinstance(block, dict) else ""
+        msg = (
+            block.get("msg") or block.get("message") or ""
+            if isinstance(block, dict)
+            else ""
+        )
+        if code_str == "PASSERROR":
+            await _close_session_client(sess)
+            return webproxy._fail(401, "bad_credential", "学号或密码不正确")
+        if code_str == "NOUSER":
+            # 本校 CAS 在「验证码正确 + 学号不存在」时回的是 NOUSER，不是 PASSERROR。
+            # 旧逻辑只认 PASSERROR，于是「账号填错」被当成「验证码没过」，
+            # 白白烧掉 3 张验证码，最后回退成人工回填 —— 用户体感就是
+            # 「每次登录都得手输验证码」。这里直接给终态结论。
+            await _close_session_client(sess)
+            return webproxy._fail(401, "bad_credential", "学号不存在，请确认学号后重试")
+        if _looks_locked(f"{code_str} {msg}"):
+            await _close_session_client(sess)
+            return webproxy._fail(423, "locked", "账号已被临时锁定，请稍后再试")
+
+    # 自动识别没成：重新取一张干净的验证码，交给用户手填。
     try:
         uid, captcha_b64 = await _fetch_captcha(client)
-    except httpx.TimeoutException:
-        return webproxy._fail(504, "upstream_timeout", "连接学校系统超时，请稍后重试")
+        sess.captcha_uid = uid
     except Exception:  # noqa: BLE001
+        await _close_session_client(sess)
         return webproxy._fail(502, "upstream_error", "获取验证码失败，请稍后重试")
-    finally:
-        await client.aclose()
 
-    sess.captcha_uid = uid
     async with _lock:
-        _purge_expired()
-        # 同一学号挤掉旧会话（含未完成的 pending）。
-        old = _by_user.get(username)
-        if old:
-            _sessions.pop(old, None)
+        await _purge_expired()
+        # 同一学号保留最近 MAX_PER_USER 条会话（多设备互不踢）。
         _sessions[sid] = sess
-        _by_user[username] = sid
+        evicted = _remember_user_session(username, sid)
+    for old_sess in evicted:
+        await _close_session_client(old_sess)
 
     return {"session_id": sid, "captcha_b64": captcha_b64}
 
@@ -353,45 +522,35 @@ async def session_submit(request: Request) -> Any:
         return webproxy._fail(400, "missing_field", "缺少 session_id 或验证码")
 
     async with _lock:
-        _purge_expired()
+        await _purge_expired()
         sess = _sessions.get(sid)
         if sess is None or sess.stage != "pending":
             return webproxy._fail(401, "session_expired", "会话已过期，请重新登录")
 
-    client = _new_client()
+    client = _session_client(sess)
     try:
         data = await _submit_ticket(client, sess, code)
     except httpx.TimeoutException:
+        await _close_session_client(sess)
         return webproxy._fail(504, "upstream_timeout", "连接学校系统超时，请稍后重试")
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
+        await _close_session_client(sess)
         return webproxy._fail(502, "upstream_error", f"提交登录失败：{type(e).__name__}: {e}")
 
     tgt = data.get("tgt")
     if isinstance(tgt, str) and tgt:
         try:
-            ready, sso_detail = await _sso_to(
-                client, tgt, sess.service, sess.cookies
-            )
+            ready, sso_detail = await _finish_login(sess, client, tgt)
         except Exception as e:  # noqa: BLE001
             import traceback
+
             traceback.print_exc()
             ready, sso_detail = False, f"{type(e).__name__}: {e}"
         if not ready:
+            await _close_session_client(sess)
             return webproxy._fail(502, "sso_failed", f"换取教务会话失败：{sso_detail}")
-        # 融合门户（一卡通余额）独立子系统：best-effort 再建一套门户 cookie 罐；
-        # 失败不阻断教务登录 —— 余额功能降级，不影响课表 / 成绩 / 考试 / 学业。
-        try:
-            await _sso_to(client, tgt, PORTAL_SERVICE, sess.portal_cookies)
-        except Exception:  # noqa: BLE001
-            import traceback
-            traceback.print_exc()
-        sess.stage = "ready"
-        sess.last = _now()
-        # 登录成功后不再保留加密密码。
-        sess.encrypted_password = ""
-        sess.captcha_uid = ""
         return {"ok": True, "note": "登录成功"}
 
     data_block = data.get("data")
@@ -403,6 +562,9 @@ async def session_submit(request: Request) -> Any:
     )
     if code_str == "PASSERROR":
         return webproxy._fail(401, "bad_credential", "学号或密码不正确")
+    if code_str == "NOUSER":
+        # 同 session_start：NOUSER 是终态（学号不存在），不该再让用户换验证码。
+        return webproxy._fail(401, "bad_credential", "学号不存在，请确认学号后重试")
     if _looks_locked(f"{code_str} {msg}"):
         return webproxy._fail(423, "locked", "账号已被临时锁定，请稍后再试")
     return webproxy._fail(400, "captcha_failed", "验证码错误，请换一张重试")
@@ -447,12 +609,13 @@ async def session_fetch(request: Request) -> Any:
     is_portal = host == "my.cwxu.edu.cn" or host.endswith(".my.cwxu.edu.cn")
 
     async with _lock:
-        _purge_expired()
+        await _purge_expired()
         sess = _sessions.get(sid)
         if sess is None or sess.stage != "ready":
             return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
         sess.last = _now()
         jar = dict(sess.portal_cookies if is_portal else sess.cookies)
+        client = _session_client(sess)
 
     method = str(payload.get("method") or "GET").upper()
     if method not in ("GET", "POST", "HEAD", "PUT", "DELETE", "PATCH"):
@@ -476,7 +639,6 @@ async def session_fetch(request: Request) -> Any:
         except Exception:  # noqa: BLE001
             return webproxy._fail(400, "bad_body", "body_b64 不是合法 base64")
 
-    client = _new_client()
     try:
         # 逐跳跟随 302（对齐安卓 CampusSession：会话 cookie 藏在中间跳转里），
         # 每跳捕获 Set-Cookie 回写本地 jar，落地后再写回服务端会话罐。
@@ -488,12 +650,13 @@ async def session_fetch(request: Request) -> Any:
             hop_headers = dict(headers)
             if jar:
                 hop_headers["cookie"] = _cookie_header(jar)
-            resp = await client.request(
-                hop_method,
-                hop_url,
-                headers=hop_headers,
-                content=hop_body,
-            )
+            async with sess.request_lock:
+                resp = await client.request(
+                    hop_method,
+                    hop_url,
+                    headers=hop_headers,
+                    content=hop_body,
+                )
             _capture_cookies(resp.headers, jar)
             location = resp.headers.get("location")
             if (
@@ -542,8 +705,104 @@ async def session_fetch(request: Request) -> Any:
         return webproxy._fail(502, "upstream_error", f"访问学校系统失败：{type(exc).__name__}")
     except Exception as exc:  # noqa: BLE001
         return webproxy._fail(502, "upstream_error", f"代理失败：{type(exc).__name__}")
-    finally:
-        await client.aclose()
+
+
+#: 探活上游教务会话用的轻量页面（成绩查询首页：有会话 200，失效则 302 弹回登录）。
+_JWGL_PROBE_URL = (
+    f"{JWGL_BASE}/jwglxt/cjcx/cjcx_cxDgXscj.html?gnmkdm=N305005&layout=default"
+)
+
+
+async def _campus_alive(client: httpx.AsyncClient, jar: dict[str, str]) -> bool:
+    """用一次 GET 判断教务 cookie 罐是否仍被上游认可。"""
+    headers = {"Referer": f"{JWGL_BASE}/jwglxt/xtgl/index_initMenu.html"}
+    if jar:
+        headers["Cookie"] = _cookie_header(jar)
+    try:
+        resp = await client.get(_JWGL_PROBE_URL, headers=headers)
+    except Exception:  # noqa: BLE001
+        return False
+    if resp.status_code != 200:
+        return False
+    return "dl_loginForwa" not in (resp.text or "")
+
+
+@router.post("/api/v1/campus/session/refresh")
+async def session_refresh(request: Request) -> Any:
+    """探活 + 静默续期：免验证码、免账密地维持登录态。
+
+    流程：先用一次 GET 探上游教务罐；还活着就只滑动续期（``refreshed=false``），
+    死了就用登录时留下的 TGT 重新换 ST 重建 cookie 罐（``refreshed=true``）。
+    两者都失败才返回 401，由前端决定是否让用户重新登录。
+    """
+    if httpx is None:
+        return webproxy._fail(503, "proxy_unavailable", "服务器缺少 httpx，网页版教务暂不可用")
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+    sid = str(payload.get("session_id") or "").strip() if isinstance(payload, dict) else ""
+    if not sid:
+        return webproxy._fail(400, "missing_field", "缺少 session_id")
+
+    async with _lock:
+        await _purge_expired()
+        sess = _sessions.get(sid)
+        if sess is None or sess.stage != "ready":
+            return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
+        client = _session_client(sess)
+        jar = dict(sess.cookies)
+        tgt = sess.tgt
+        service = sess.service
+
+    if await _campus_alive(client, jar):
+        async with _lock:
+            sess.last = _now()
+        return {"ok": True, "refreshed": False}
+
+    if not tgt:
+        # 早期会话没有留 TGT，无法静默重建 —— 只能让用户重新登录。
+        async with _lock:
+            gone = _sessions.pop(sid, None)
+            if gone is not None:
+                _forget_user_session(gone.username, sid)
+        if gone is not None:
+            await _close_session_client(gone)
+        return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
+
+    fresh: dict[str, str] = {}
+    try:
+        ready, detail = await _sso_to(client, tgt, service, fresh)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return webproxy._fail(502, "upstream_error", f"静默续期失败：{type(exc).__name__}: {exc}")
+
+    if not ready:
+        # TGT 也失效了（CAS 侧过期或已被挤掉）→ 必须重新走账密 + 验证码。
+        async with _lock:
+            gone = _sessions.pop(sid, None)
+            if gone is not None:
+                _forget_user_session(gone.username, sid)
+        if gone is not None:
+            await _close_session_client(gone)
+        return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
+
+    # 门户（一卡通余额）独立子系统：best-effort 重建，失败不影响教务。
+    portal: dict[str, str] = {}
+    try:
+        await _sso_to(client, tgt, PORTAL_SERVICE, portal)
+    except Exception:  # noqa: BLE001
+        portal = {}
+
+    async with _lock:
+        sess.cookies = fresh
+        if portal:
+            sess.portal_cookies = portal
+        sess.last = _now()
+
+    return {"ok": True, "refreshed": True, "detail": detail}
 
 
 @router.post("/api/v1/campus/session/ping")
@@ -566,7 +825,7 @@ async def session_ping(request: Request) -> Any:
         return webproxy._fail(400, "missing_field", "缺少 session_id")
 
     async with _lock:
-        _purge_expired()
+        await _purge_expired()
         sess = _sessions.get(sid)
         if sess is None or sess.stage != "ready":
             return webproxy._fail(401, "session_expired", "登录已过期，请重新登录")
@@ -585,8 +844,10 @@ async def session_logout(request: Request) -> Any:
     sid = str(payload.get("session_id") or "").strip() if isinstance(payload, dict) else ""
     async with _lock:
         sess = _sessions.pop(sid, None)
-        if sess and _by_user.get(sess.username) == sid:
-            _by_user.pop(sess.username, None)
+        if sess is not None:
+            _forget_user_session(sess.username, sid)
+    if sess is not None:
+        await _close_session_client(sess)
     return {"ok": True}
 
 
