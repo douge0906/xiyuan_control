@@ -237,6 +237,37 @@ def test_bridge_ticket_works_for_ready_session() -> None:
     assert payload["st_gw"] and payload["st_plat"], payload
 
 
+def test_cprint_link_response_shape() -> None:
+    """云打印跳转：login_url 带网关票，target_url 是包装过的内网云打印页。"""
+    sess = _session(stage="cas", mode="bridge")
+    _store(sess)
+    fake_cas_st, calls = _mint({}, st_gw="ST-cprint-gw")
+    original = webvpn.cas_st
+    webvpn.cas_st = fake_cas_st
+    try:
+        result = asyncio.run(
+            dorm_proxy.cprint_link(FakeRequest({"session_id": sess.sid}))
+        )
+    finally:
+        webvpn.cas_st = original
+        _clear_sessions()
+
+    payload = asyncio.run(_json_of(result))
+    assert payload["ok"] is True, payload
+    assert payload["gateway_origin"] == webvpn.GATEWAY, payload
+    login_url = payload["login_url"]
+    assert login_url.startswith(f"{webvpn.GATEWAY}/login?cas_login=true"), login_url
+    assert "ticket=ST-cprint-gw" in login_url, login_url
+    target = payload["target_url"]
+    assert target.startswith(f"{webvpn.GATEWAY}/http-9130/"), target
+    assert webvpn.encrypt_host(dorm_proxy.CPRINT_HOST) in target, target
+    assert target.endswith("/client/new/cprintPc/scanDoc.html"), target
+    # 只铸一张网关票，且按网关 service 铸。
+    assert len(calls) == 1, calls
+    assert calls[0][1] == webvpn.WEBVPN_LOGIN_SERVICE, calls
+    assert payload["expires_in"] == dorm_proxy.RECHARGE_URL_TTL, payload
+
+
 def test_bridge_ticket_missing_session_id() -> None:
     """缺 session_id → 400 missing_field。"""
     result = asyncio.run(dorm_proxy.bridge_ticket(FakeRequest({})))
@@ -415,6 +446,7 @@ _TESTS = [
     test_bridge_route_over_http,
     test_bridge_ticket_response_shape,
     test_bridge_ticket_works_for_ready_session,
+    test_cprint_link_response_shape,
     test_bridge_ticket_missing_session_id,
     test_bridge_ticket_unknown_session,
     test_bridge_ticket_mint_failure_does_not_leak_ticket,

@@ -148,6 +148,12 @@ CONTROL_HOST = "con.wxxydouge.icu"
 #: 桥页在内网平台上的主机（hex 形式由 `webvpn.encrypt_host` 算）。
 PLATFORM_HOST = "10.3.100.110"
 
+# 图书馆云打印（内网 9130，网页版通过 WebVPN 网关打开）
+CPRINT_HOST = "zzwy.cwxu.edu.cn"
+CPRINT_PORT = 9130
+CPRINT_SCAN_PATH = "/client/new/cprintPc/scanDoc.html"
+CPRINT_SCAN_URL = f"http://{CPRINT_HOST}:{CPRINT_PORT}{CPRINT_SCAN_PATH}"
+
 #: 桥页 URL 路径（经网关代理后是 `/https/<hex(控制域名)>/api/v1/campus/dorm/bridge`）。
 BRIDGE_PATH = "/api/v1/campus/dorm/bridge"
 
@@ -1390,6 +1396,67 @@ async def bridge_ticket(request: Request) -> Any:
         "st_gw": st_gw,
         "st_plat": st_plat,
         "hex_plat": webvpn.encrypt_host(PLATFORM_HOST),
+        "expires_in": RECHARGE_URL_TTL,
+    }
+
+
+@router.post("/api/v1/campus/cprint/link")
+async def cprint_link(request: Request) -> Any:
+    """给网页版「图书馆云打印」签发一组可以直接打开的网关地址。
+
+    网页版不能上传/下载文件，所以云打印正文仍要跳去图书馆自己的网页。但那个
+    网页在内网（``zzwy.cwxu.edu.cn:9130``），外网必须先过 WebVPN 网关，而网关
+    又要求先换网关票据 cookie。这里把两件事一起办掉：
+
+    - ``login_url``：带一次性 ``st_gw`` 的网关登录地址，浏览器**先**打开它，
+      网关票据 cookie 就落到浏览器里（服务端换不了，卡在出口 IP 上）；
+    - ``target_url``：经网关包装后的云打印页面地址；
+    - ``target_url`` 打开后，云打印会自己发起统一身份认证；网关会把那一跳也包装进
+      网关域，所以校外登录完照样能回跳到云打印首页（2026-11-27 实测）。
+
+    请求体：``{"session_id": "..."}``。⚠️ 票据一进日志就等于泄漏，所以这里只
+    回给调用方，文案里不出现票值。
+    """
+    if httpx is None:
+        return _fail(503, "proxy_unavailable", "服务器缺少 httpx，云打印跳转暂不可用")
+
+    payload = await _body(request)
+    sid = str(payload.get("session_id") or "").strip()
+    if not sid:
+        return _fail(400, "missing_field", "缺少 session_id")
+
+    try:
+        sess = await _require_cas_session(sid)
+    except DormError as exc:
+        return _fail(exc.status, exc.code, exc.message)
+
+    client = _session_client(sess)
+    try:
+        st_gw = await webvpn.cas_st(
+            client, sess.tgt, webvpn.WEBVPN_LOGIN_SERVICE
+        )
+    except webvpn.CasError as exc:
+        return _fail(401, "unauthorized", webvpn.redact(str(exc)))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(502, "upstream_error", f"铸造票据失败：{type(exc).__name__}")
+
+    if not st_gw:
+        return _fail(502, "upstream_error", "铸造票据失败：票据为空")
+
+    await _touch(sid)
+    return {
+        "ok": True,
+        "gateway_origin": webvpn.GATEWAY,
+        "login_url": (
+            f"{webvpn.GATEWAY}/login?cas_login=true"
+            f"&ticket={quote(st_gw, safe='')}"
+        ),
+        # 域名主机不在 webvpn.needs_wrap 的白名单里（那里只认内网 IPv4），
+        # 这里按网关的「协议-端口/密文主机」格式手工拼。
+        "target_url": (
+            f"{webvpn.GATEWAY}/http-{CPRINT_PORT}"
+            f"/{webvpn.encrypt_host(CPRINT_HOST)}{CPRINT_SCAN_PATH}"
+        ),
         "expires_in": RECHARGE_URL_TTL,
     }
 
