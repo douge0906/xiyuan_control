@@ -98,10 +98,10 @@ class Config:
         self.edge_zone_id = values.get("EDGE_ZONE_ID", "").strip()
 
         # 资源中心每日下载额度：登录后按账号跨设备累计，未登录按设备累计。
-        #   基础额度 5 次/天；
+        #   基础额度 10 次/天（2026-11-27 从 5 调到 10）；
         #   每成功邀请 1 人，额外加 10 次/天（按邀人账号累计，设上限防滥用）。
         self.resource_daily_download_limit = max(1, int(
-            values.get("RESOURCE_DAILY_DOWNLOAD_LIMIT", "5") or 5
+            values.get("RESOURCE_DAILY_DOWNLOAD_LIMIT", "10") or 10
         ))
         self.resource_invite_bonus_per_invite = max(0, int(
             values.get("RESOURCE_INVITE_BONUS_PER_INVITE", "10") or 10
